@@ -1,3 +1,5 @@
 # ignore app cache folder
 .cache/
 dogvenv/
+__pycache__/
+*.pyc

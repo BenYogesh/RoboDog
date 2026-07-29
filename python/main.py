@@ -9,6 +9,10 @@ import traceback
 from arduino.app_utils import App, Bridge
 from detector import HandGestureDetector
 
+# The UNO Q runs the camera thread plus hand, face, and object models. Keep
+# OpenCV to one worker so those workloads do not oversubscribe the device.
+cv2.setNumThreads(1)
+
 bridge = Bridge()
 
 # --- 1. MOTOR COMMAND OUTPUT (via Bridge) ---
@@ -140,10 +144,10 @@ def set_cam_state(new_state):
 # lost between frames constantly — motion blur, looking away briefly,
 # etc.), so a familiar sighting latches command access for a grace
 # period rather than requiring re-confirmation every single frame.
-FACE_CHECK_INTERVAL = 5       # throttled, same pattern as the other secondary checks
+FACE_CHECK_PERIOD_S = 0.8      # face recognition is a secondary, bounded workload
 FAMILIAR_GRACE_S = 3.0
 last_familiar_time = 0.0      # 0.0 means "never seen anyone familiar yet"
-face_check_counter = 0
+next_face_check_at = 0.0
 last_face_matrix_state = None  # avoids resending the same LED matrix expression repeatedly
 
 
@@ -639,9 +643,10 @@ def main_loop():
         # Throttled face recognition check — updates last_familiar_time
         # (which gates whether any command actually gets dispatched
         # below) and the LED matrix expression.
-        global face_check_counter, last_familiar_time
-        face_check_counter += 1
-        if face_check_counter % FACE_CHECK_INTERVAL == 0:
+        global next_face_check_at, last_familiar_time
+        now = time.monotonic()
+        if now >= next_face_check_at:
+            next_face_check_at = now + FACE_CHECK_PERIOD_S
             face_status, face_name = face_gate.recognize(frame)
             if face_status == 'familiar':
                 last_familiar_time = time.time()
@@ -805,6 +810,10 @@ def main_loop():
         # ball-mode issue hard to pin down from the logs alone.
         print("Loop Error:")
         traceback.print_exc()
+        # Never leave the ESP32 executing the previous gait after a Python
+        # vision failure. send_motor_command already contains its own bridge
+        # failure handling.
+        send_motor_command(CMD_STOP)
 
 
 try:
