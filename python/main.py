@@ -144,6 +144,9 @@ def set_cam_state(new_state):
 # lost between frames constantly — motion blur, looking away briefly,
 # etc.), so a familiar sighting latches command access for a grace
 # period rather than requiring re-confirmation every single frame.
+# Set this to False to allow gesture commands even when no familiar face is
+# currently recognized. Face detection and the LED expression still run.
+REQUIRE_FAMILIAR_FACE = True
 FACE_CHECK_PERIOD_S = 0.8      # face recognition is a secondary, bounded workload
 FAMILIAR_GRACE_S = 3.0
 last_familiar_time = 0.0      # 0.0 means "never seen anyone familiar yet"
@@ -152,7 +155,10 @@ last_face_matrix_state = None  # avoids resending the same LED matrix expression
 
 
 def commands_currently_allowed():
-    return (time.time() - last_familiar_time) < FAMILIAR_GRACE_S
+    return (
+        not REQUIRE_FAMILIAR_FACE
+        or (time.time() - last_familiar_time) < FAMILIAR_GRACE_S
+    )
 
 
 def set_face_matrix(expression):
