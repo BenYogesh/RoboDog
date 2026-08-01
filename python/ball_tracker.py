@@ -94,9 +94,45 @@ class BallTracker:
                 f"({self._forward_error_count} times so far): {error}"
             )
 
-    def _predict(self, frame):
-        blob = cv2.dnn.blobFromImage(
+    def _letterbox(self, frame):
+        """Resize without distortion and return the transform to undo it."""
+        height, width = frame.shape[:2]
+        scale = min(self.MODEL_INPUT_SIZE / width, self.MODEL_INPUT_SIZE / height)
+        resized_width = round(width * scale)
+        resized_height = round(height * scale)
+        resized = cv2.resize(
             frame,
+            (resized_width, resized_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+        pad_width = self.MODEL_INPUT_SIZE - resized_width
+        pad_height = self.MODEL_INPUT_SIZE - resized_height
+        pad_left = pad_width // 2
+        pad_top = pad_height // 2
+        padded = cv2.copyMakeBorder(
+            resized,
+            pad_top,
+            pad_height - pad_top,
+            pad_left,
+            pad_width - pad_left,
+            cv2.BORDER_CONSTANT,
+            value=(114, 114, 114),
+        )
+        return padded, scale, pad_left, pad_top
+
+    @staticmethod
+    def _to_frame_box(row, scale, pad_left, pad_top):
+        """Map a YOLO center box from letterboxed pixels to camera pixels."""
+        center_x, center_y, box_width, box_height = row[:4]
+        left = (center_x - box_width / 2 - pad_left) / scale
+        top = (center_y - box_height / 2 - pad_top) / scale
+        return left, top, box_width / scale, box_height / scale
+
+    def _predict(self, frame):
+        letterboxed, scale, pad_left, pad_top = self._letterbox(frame)
+        blob = cv2.dnn.blobFromImage(
+            letterboxed,
             scalefactor=1.0 / 255.0,
             size=(self.MODEL_INPUT_SIZE, self.MODEL_INPUT_SIZE),
             swapRB=True,
@@ -112,9 +148,9 @@ class BallTracker:
         raw = np.squeeze(outputs[0])
         expected_width = 4 + len(COCO_CLASSES)
         if raw.shape[0] == expected_width:
-            return raw.T
+            return raw.T, scale, pad_left, pad_top
         if raw.shape[-1] == expected_width:
-            return raw
+            return raw, scale, pad_left, pad_top
 
         print(
             f"BALL MODEL WARNING: unexpected output shape {raw.shape}; "
@@ -124,13 +160,11 @@ class BallTracker:
 
     def detect_ball(self, frame):
         """Return ((x, y, radius) | None, diagnostic class candidates)."""
-        height, width = frame.shape[:2]
-        predictions = self._predict(frame)
-        if predictions is None:
+        prediction_result = self._predict(frame)
+        if prediction_result is None:
             return None, []
+        predictions, scale, pad_left, pad_top = prediction_result
 
-        scale_x = width / self.MODEL_INPUT_SIZE
-        scale_y = height / self.MODEL_INPUT_SIZE
         boxes = []
         confidences = []
         candidates = []
@@ -144,10 +178,7 @@ class BallTracker:
             if class_id != self.SPORTS_BALL_CLASS_ID or confidence < self.BALL_CONF_THRESHOLD:
                 continue
 
-            center_x, center_y, box_width, box_height = row[:4]
-            left = (center_x - box_width / 2) * scale_x
-            top = (center_y - box_height / 2) * scale_y
-            boxes.append([left, top, box_width * scale_x, box_height * scale_y])
+            boxes.append(list(self._to_frame_box(row, scale, pad_left, pad_top)))
             confidences.append(confidence)
 
         candidates.sort(key=lambda candidate: candidate[1], reverse=True)
@@ -174,13 +205,11 @@ class BallTracker:
 
     def detect_person(self, frame):
         """Return the highest-confidence person box, or None."""
-        height, width = frame.shape[:2]
-        predictions = self._predict(frame)
-        if predictions is None:
+        prediction_result = self._predict(frame)
+        if prediction_result is None:
             return None
+        predictions, scale, pad_left, pad_top = prediction_result
 
-        scale_x = width / self.MODEL_INPUT_SIZE
-        scale_y = height / self.MODEL_INPUT_SIZE
         boxes = []
         confidences = []
         for row in predictions:
@@ -190,10 +219,7 @@ class BallTracker:
             if class_id != self.PERSON_CLASS_ID or confidence < self.PERSON_CONF_THRESHOLD:
                 continue
 
-            center_x, center_y, box_width, box_height = row[:4]
-            left = (center_x - box_width / 2) * scale_x
-            top = (center_y - box_height / 2) * scale_y
-            boxes.append([left, top, box_width * scale_x, box_height * scale_y])
+            boxes.append(list(self._to_frame_box(row, scale, pad_left, pad_top)))
             confidences.append(confidence)
 
         if not boxes:
