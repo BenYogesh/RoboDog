@@ -1,4 +1,4 @@
-"""YOLO-based ball chasing and person framing for the RoboDog vision app."""
+"""Code phát hiện và đi theo bóng và người sử dụng YOLOv8n."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-
+# Mảng chứa các vật thể mà model YOLOv8n có thể phát hiện, theo chuẩn COCO dataset.
 COCO_CLASSES = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
     "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
@@ -24,47 +24,52 @@ COCO_CLASSES = [
 
 
 class BallTracker:
-    """Owns the YOLO model and state that persists during ball chasing."""
+    # Lớp kiểm soát model YOLOv8n, theo dõi trạng thái hiện tại
 
-    MODEL_INPUT_SIZE = 320
-    SPORTS_BALL_CLASS_ID = 32
-    PERSON_CLASS_ID = 0
-    BALL_CONF_THRESHOLD = 0.25
-    PERSON_CONF_THRESHOLD = 0.4
-    NMS_THRESHOLD = 0.45
-    DIAGNOSTIC_MIN_CONF = 0.15
-    DIAGNOSTIC_TOP_N = 5
-    BALL_FOUND_RADIUS = 45
-    BALL_CENTER_DEADZONE = 25
-    NEVER_SEEN_TIMEOUT_S = 6.0
-    SPIN_SEARCH_TIMEOUT_S = 6.0
-    MANUAL_STOP_CHECK_INTERVAL = 5
-    CAMERA_CHECK_INTERVAL = 5
-    LEG_ONLY_TOP_MARGIN_PX = 15
-    PERSON_MIN_HEIGHT_PX = 40
+    MODEL_INPUT_SIZE = 320          # Kích thước đầu vào của model YOLOv8n
+    SPORTS_BALL_CLASS_ID = 32       # ID của lớp "sports ball" trong COCO_CLASSES
+    PERSON_CLASS_ID = 0             # ID của lớp "person" trong COCO_CLASSES
+    BALL_CONF_THRESHOLD = 0.15      # Ngưỡng tự tin để coi một vật thể là bóng
+    PERSON_CONF_THRESHOLD = 0.4     # Ngưỡng tự tin để coi một vật thể là người
+    NMS_THRESHOLD = 0.45            # Ngưỡng loại bỏ các dự đoán trùng lặp
+    DIAGNOSTIC_MIN_CONF = 0.15      # Ngưỡng tự tin tối thiểu để hiển thị các lớp vật thể khác ngoài bóng
+    DIAGNOSTIC_TOP_N = 5            # Số lượng vật thể hàng đầu để hiển thị trong chẩn đoán
+    BALL_FOUND_RADIUS = 45          # Bán kính (pixel) của bóng để coi là đã tìm thấy
+    BALL_CENTER_DEADZONE = 25       # Vùng chết (pixel) xung quanh tâm khung hình để coi bóng là ở giữa
+    NEVER_SEEN_TIMEOUT_S = 6.0      # Thời gian (giây) để từ bỏ nếu chưa từng thấy bóng
+    SPIN_SEARCH_TIMEOUT_S = 6.0     # Thời gian (giây) để từ bỏ nếu mất bóng trong khi đang theo dõi
+    MANUAL_STOP_CHECK_INTERVAL = 5  # Số khung hình giữa các lần kiểm tra lệnh dừng thủ công
+    CAMERA_CHECK_INTERVAL = 5       # Số khung hình giữa các lần kiểm tra camera
+    LEG_ONLY_TOP_MARGIN_PX = 15     # Khoảng cách (pixel) từ trên cùng của khung hình để coi là chỉ thấy chân
+    PERSON_MIN_HEIGHT_PX = 40       # Chiều cao tối thiểu (pixel) của người để coi là hợp lệ
 
     def __init__(self, model_path: str | Path, walk_command: str, stop_command: str,
                  left_command: str, right_command: str):
-        self.net = cv2.dnn.readNet(str(model_path))
-        self.output_names = self.net.getUnconnectedOutLayersNames()
-        self.walk_command = walk_command
-        self.stop_command = stop_command
-        self.left_command = left_command
-        self.right_command = right_command
-        self._forward_error_count = 0
-        self._manual_stop_check_counter = 0
-        self._camera_check_counter = 0
-        self.ball_ever_seen = False
-        self.last_seen_ball_side = None
-        self.chase_entry_time = 0.0
-        self.last_ball_seen_time = 0.0
-        self._verify_model_input_size()
+        # Khởi tạo BallTracker với đường dẫn model và các lệnh điều khiển
+
+        self.net = cv2.dnn.readNet(str(model_path))                 # Đọc model YOLOv8n từ file ONNX
+        self.output_names = self.net.getUnconnectedOutLayersNames() # Lấy tên các lớp đầu ra của model
+        self.walk_command = walk_command                            # Lệnh để robot đi thẳng về phía trước
+        self.stop_command = stop_command                            # Lệnh để robot dừng lại
+        self.left_command = left_command                            # Lệnh để robot rẽ trái
+        self.right_command = right_command                          # Lệnh để robot rẽ phải 
+        self._forward_error_count = 0                               # Đếm số lần lỗi khi đưa dữ liệu qua model nhận diện
+        self._manual_stop_check_counter = 0                         # Đếm số khung hình để kiểm tra lệnh dừng thủ công
+        self._camera_check_counter = 0                              # Đếm số khung hình để kiểm tra camera
+        self.ball_ever_seen = False                                 # Cờ để xác định xem bóng đã từng được nhìn thấy hay chưa
+        self.last_seen_ball_side = None                             # Lưu trữ bên camera thấy bóng lần cuối
+        self.chase_entry_time = 0.0                                 # Thời điểm bắt đầu theo dõi bóng
+        self.last_ball_seen_time = 0.0                              # Thời gian lần cuối bóng được nhìn thấy
+        self._verify_model_input_size()                             # Kiểm tra xem model có chấp nhận kích thước đầu vào đã cài đặt hay không
 
     def _verify_model_input_size(self):
+        # Kiểm tra xem model YOLOv8n có chấp nhận kích thước đầu vào đã cài đặt hay không
         dummy = np.zeros(
-            (self.MODEL_INPUT_SIZE, self.MODEL_INPUT_SIZE, 3), dtype=np.uint8
+            # Tạo một ảnh giả để kiểm tra kích thước đầu vào của model
+            (self.MODEL_INPUT_SIZE, self.MODEL_INPUT_SIZE, 3), dtype=np.uint8 
         )
         blob = cv2.dnn.blobFromImage(
+            # Tạo blob từ ảnh giả để đưa vào model
             dummy,
             scalefactor=1.0 / 255.0,
             size=(self.MODEL_INPUT_SIZE, self.MODEL_INPUT_SIZE),
@@ -72,6 +77,7 @@ class BallTracker:
             crop=False,
         )
         try:
+            # Đưa blob qua model nhận diện để kiểm tra kích thước đầu vào
             self.net.setInput(blob)
             self.net.forward(self.output_names)
             print(
@@ -87,6 +93,7 @@ class BallTracker:
             )
 
     def _log_forward_error(self, error):
+        # Ghi lại số lần lỗi khi đưa dữ liệu qua model
         self._forward_error_count += 1
         if self._forward_error_count % 30 == 1:
             print(
@@ -95,7 +102,7 @@ class BallTracker:
             )
 
     def _letterbox(self, frame):
-        """Resize without distortion and return the transform to undo it."""
+        # Đóng viền cho khung hình camera để phù hợp với kích thước đầu vào của model YOLOv8n
         height, width = frame.shape[:2]
         scale = min(self.MODEL_INPUT_SIZE / width, self.MODEL_INPUT_SIZE / height)
         resized_width = round(width * scale)
@@ -123,13 +130,14 @@ class BallTracker:
 
     @staticmethod
     def _to_frame_box(row, scale, pad_left, pad_top):
-        """Map a YOLO center box from letterboxed pixels to camera pixels."""
+        # Chuyển đổi tọa độ bounding box từ đầu ra của model sang tọa độ trong khung hình gốc
         center_x, center_y, box_width, box_height = row[:4]
         left = (center_x - box_width / 2 - pad_left) / scale
         top = (center_y - box_height / 2 - pad_top) / scale
         return left, top, box_width / scale, box_height / scale
 
     def _predict(self, frame):
+        # Thực hiện dự đoán trên khung hình camera bằng model YOLOv8n
         letterboxed, scale, pad_left, pad_top = self._letterbox(frame)
         blob = cv2.dnn.blobFromImage(
             letterboxed,
@@ -159,7 +167,7 @@ class BallTracker:
         return None
 
     def detect_ball(self, frame):
-        """Return ((x, y, radius) | None, diagnostic class candidates)."""
+        # Trả về tọa độ tâm và bán kính của bóng, hoặc None nếu không tìm thấy bóng.
         prediction_result = self._predict(frame)
         if prediction_result is None:
             return None, []
@@ -204,7 +212,7 @@ class BallTracker:
         ), top_candidates
 
     def detect_person(self, frame):
-        """Return the highest-confidence person box, or None."""
+        # Trả về bounding box của người, hoặc None nếu không tìm thấy người.
         prediction_result = self._predict(frame)
         if prediction_result is None:
             return None
@@ -235,6 +243,7 @@ class BallTracker:
         return left, top, left + box_width, top + box_height
 
     def is_legs_only(self, person_box):
+        # Kiểm tra xem bounding box của người có chỉ thấy chân hay không dựa trên chiều cao và vị trí của bounding box.
         _, top, _, bottom = person_box
         return (
             top <= self.LEG_ONLY_TOP_MARGIN_PX
@@ -242,20 +251,24 @@ class BallTracker:
         )
 
     def should_check_manual_stop(self):
+        # Kiểm tra xem có cần kiểm tra lệnh dừng thủ công hay không.
         self._manual_stop_check_counter += 1
         return self._manual_stop_check_counter % self.MANUAL_STOP_CHECK_INTERVAL == 0
 
     def should_check_camera(self):
+        # Kiểm tra xem có cần kiểm tra camera hay không.
         self._camera_check_counter += 1
         return self._camera_check_counter % self.CAMERA_CHECK_INTERVAL == 0
 
     def start_chase(self):
+        # Bắt đầu theo dõi bóng, đặt lại các trạng thái liên quan.
         self.ball_ever_seen = False
         self.last_seen_ball_side = None
         self.chase_entry_time = time.time()
         self.last_ball_seen_time = time.time()
 
     def command_for_frame(self, frame):
+        # Xác định lệnh điều khiển dựa trên khung hình hiện tại
         ball, top_candidates = self.detect_ball(frame)
         command, display_text, exit_reason = self._decide_chase_command(
             ball, frame.shape[1]
