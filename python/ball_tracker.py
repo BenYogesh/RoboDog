@@ -276,8 +276,10 @@ class BallTracker:
         return ball, top_candidates, command, display_text, exit_reason
 
     def _decide_chase_command(self, ball, frame_width):
+        # Quyết định lệnh điều khiển dựa trên vị trí bóng và trạng thái hiện tại
         frame_center = frame_width / 2.0
         if ball is not None:
+            # Nếu bóng được phát hiện, cập nhật trạng thái và quyết định lệnh dựa trên vị trí của bóng
             x, _, radius = ball
             self.ball_ever_seen = True
             self.last_seen_ball_side = "left" if x < frame_center else "right"
@@ -292,11 +294,13 @@ class BallTracker:
             return self.walk_command, "Chasing: forward", None
 
         if not self.ball_ever_seen:
+            # Nếu bóng chưa từng được nhìn thấy, kiểm tra xem đã quá thời gian chờ hay chưa
             if time.time() - self.chase_entry_time >= self.NEVER_SEEN_TIMEOUT_S:
                 return self.stop_command, "No ball found, giving up", "gave_up"
             return self.stop_command, "Searching (never seen yet)", None
 
         if time.time() - self.last_ball_seen_time >= self.SPIN_SEARCH_TIMEOUT_S:
+            # Nếu bóng đã từng được nhìn thấy nhưng mất dấu quá lâu, từ bỏ việc theo dõi
             return self.stop_command, "Lost ball, giving up", "gave_up"
         command = (
             self.left_command
