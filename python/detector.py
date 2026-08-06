@@ -2,37 +2,40 @@
 Code phát hiện cử chỉ bàn tay bằng cách sử dụng mô hình MediaPipe Palm Detection và Hand Pose Estimation.
 """
 
+# Khai báo thư viện sử dụng
 import os
 import numpy as np
 from hand_models.mp_palmdet import MPPalmDet
 from hand_models.mp_handpose import MPHandPose
 
+# Địa chỉ của các file ONNX của mô hình MediaPipe
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 PALM_MODEL_PATH = os.path.join(_THIS_DIR, "hand_models", "palm_detection_mediapipe_2023feb.onnx")
 HAND_MODEL_PATH = os.path.join(_THIS_DIR, "hand_models", "handpose_estimation_mediapipe_2023feb.onnx")
 
-# Verified from mp_handpose.py's _postprocess() return format:
+# Các chỉ số cần sử dụng trong mảng kết quả trả về từ mô hình MediaPipe
 # [0:4]=bbox, [4:67]=21 screen landmarks (x,y,z)*21, [67:130]=world landmarks,
 # [130]=handedness (0=left,1=right), [131]=confidence
-SCREEN_LANDMARKS_START = 4
-SCREEN_LANDMARKS_END = 67
-HANDEDNESS_IDX = 130
-CONF_IDX = 131
+SCREEN_LANDMARKS_START = 4  # Chỉ số khởi đầu của các điểm mốc trên màn hình
+SCREEN_LANDMARKS_END = 67   # Chỉ số kết thúc của các điểm mốc trên màn hình
+HANDEDNESS_IDX = 130        # Chỉ số của thông tin bàn tay trái/phải
+CONF_IDX = 131              # Chỉ số của độ tin cậy dự đoán bàn tay
 
-# MediaPipe hand landmark ids (same numbering as the official docs)
-WRIST = 0
-THUMB_TIP = 4
-INDEX_TIP = 8
-MIDDLE_TIP = 12
-RING_TIP = 16
-PINKY_TIP = 20
-INDEX_MCP = 5   # knuckle (base) joints, used as a reference for "curled vs extended"
-MIDDLE_MCP = 9
-RING_MCP = 13
-PINKY_MCP = 17
+# Các chỉ số của các điểm mốc quan trọng trên bàn tay từ kết quả nhận diện của MediaPipe
+WRIST = 0       # Cổ tay
+THUMB_TIP = 4   # Đầu ngón cái
+INDEX_TIP = 8   # Đầu ngón trỏ   
+MIDDLE_TIP = 12 # Đầu ngón giữa
+RING_TIP = 16   # Đầu ngón áp út
+PINKY_TIP = 20  # Đầu ngón út
+INDEX_MCP = 5   # Khớp nối ngón trỏ
+MIDDLE_MCP = 9  # Khớp nối ngón giữa
+RING_MCP = 13   # Khớp nối ngón áp út 
+PINKY_MCP = 17  # Khớp nối ngón út
 
 
 class HandGestureDetector:
+    # Lớp phát hiện cử chỉ bàn tay bằng cách sử dụng mô hình MediaPipe Palm Detection và Hand Pose Estimation.
     def __init__(self, palm_model_path=PALM_MODEL_PATH, hand_model_path=HAND_MODEL_PATH,
                  score_threshold=0.6, conf_threshold=0.8):
         self.palm_detector = MPPalmDet(modelPath=palm_model_path,
@@ -45,9 +48,11 @@ class HandGestureDetector:
         """Returns a list of hands, each as a dict with 'landmarks' (21x3
         array, image-pixel x/y + relative z), 'handedness' ('Left'/'Right'),
         and 'confidence'. Empty list if no hand found."""
-        palms = self.palm_detector.infer(frame)
-        hands = []
+        # Trả về thông tin chi tiết về các bàn tay được phát hiện trong khung hình
+        palms = self.palm_detector.infer(frame) # Phát hiện các bàn tay trong khung hình
+        hands = []                              # Khởi tạo mảng lưu trữ thông tin bàn tay được phát hiện
         for palm in palms:
+            # Duyệt qua tưng từng bàn tay được phát hiện và thực hiện nhận diện các điểm mốc trên bàn tay
             result = self.hand_detector.infer(frame, palm)
             if result is None:
                 continue
@@ -62,17 +67,13 @@ class HandGestureDetector:
         return hands
 
 
-# --- EXAMPLE GESTURE CLASSIFICATION ---
-# Same pattern as your arm-gesture classifiers: distances/positions between
-# landmarks, not a learned classifier. Tune against your own debug snapshots.
-
 def _dist(a, b):
-    return float(np.linalg.norm(a[:2] - b[:2]))  # 2D pixel distance, ignore z
+    # Trả về khoảng cách giữa 2 pixel
+    return float(np.linalg.norm(a[:2] - b[:2]))  
 
 
 def is_open_palm(landmarks):
-    """All 4 fingertips (excluding thumb) are farther from the wrist than
-    their corresponding knuckle — i.e. fingers are extended."""
+    # Kiểm tra xem bàn tay có đang mở hay không
     wrist = landmarks[WRIST]
     pairs = [(INDEX_TIP, INDEX_MCP), (MIDDLE_TIP, MIDDLE_MCP),
              (RING_TIP, RING_MCP), (PINKY_TIP, PINKY_MCP)]
@@ -80,8 +81,7 @@ def is_open_palm(landmarks):
 
 
 def is_fist(landmarks):
-    """All 4 fingertips are closer to the wrist than their knuckles —
-    i.e. fingers are curled in."""
+    # Kiểm tra xem bàn tay có đang nắm hay không
     wrist = landmarks[WRIST]
     pairs = [(INDEX_TIP, INDEX_MCP), (MIDDLE_TIP, MIDDLE_MCP),
              (RING_TIP, RING_MCP), (PINKY_TIP, PINKY_MCP)]
@@ -89,8 +89,7 @@ def is_fist(landmarks):
 
 
 def is_pointing(landmarks):
-    """Index finger extended, other three fingers curled — classic
-    'point' gesture."""
+    # Kiểm tra xem bàn tay có đang chỉ ra hay không
     wrist = landmarks[WRIST]
     index_extended = _dist(landmarks[INDEX_TIP], wrist) > _dist(landmarks[INDEX_MCP], wrist)
     others_curled = all(
@@ -101,7 +100,7 @@ def is_pointing(landmarks):
 
 
 def classify_hand_gesture(landmarks):
-    """Returns a string label for the recognized gesture, or 'UNKNOWN'."""
+    # Trả về nhãn chuỗi cho cử chỉ được nhận diện, hoặc 'UNKNOWN'
     if is_open_palm(landmarks):
         return "OPEN_PALM"
     if is_fist(landmarks):
@@ -111,7 +110,6 @@ def classify_hand_gesture(landmarks):
     return "UNKNOWN"
 
 
-# --- EXAMPLE STANDALONE USAGE ---
 if __name__ == "__main__":
     import cv2
 

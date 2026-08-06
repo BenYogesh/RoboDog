@@ -4,6 +4,7 @@ Nếu phát hiện bóng, xác định lệnh điều khiển di chuyển dựa 
 Nếu phát hiện người, 
 """
 
+# Khai báo thư viện sử dụng
 from __future__ import annotations
 
 import time

@@ -1,5 +1,6 @@
-"""Main RoboDog vision loop: camera, face gate, gesture control, and Bridge I/O."""
+"""Code chính điều khiển robot RoboDog"""
 
+# Khai báo các thư viện cần thiết
 import os
 import threading
 import time
@@ -13,15 +14,15 @@ from ball_tracker import BallTracker
 from detector import HandGestureDetector
 from face_gate import FaceGate, verify_face_models
 
+cv2.setNumThreads(1)    # Khởi tạo OpenCV để sử dụng một luồng duy nhất, tránh xung đột với các luồng khác
+bridge = Bridge()       # Khởi tạo cầu nối giữa Python và Arduino để gửi lệnh điều khiển robot
 
-cv2.setNumThreads(1)
-bridge = Bridge()
-current_dir = os.path.dirname(os.path.abspath(__file__))
-camera_path = "/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0"
+current_dir = os.path.dirname(os.path.abspath(__file__))                        # Thư mục hiện tại của file main.py
+camera_path = "/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0"    # Đường dẫn đến cổng webcam
 
 
 def send_motor_command(command):
-    """Forward a one-letter movement command through the UNO Q MCU."""
+    # Gửi lệnh điều khiển động cơ đến Arduino thông qua cầu nối
     try:
         bridge.call("send_motor_command", command)
     except Exception as error:
@@ -29,8 +30,7 @@ def send_motor_command(command):
 
 
 class CameraStream:
-    """Continuously capture frames so inference never blocks on camera I/O."""
-
+    # Lớp quản lý luồng video từ webcam, đọc khung hình liên tục và lưu trữ khung hình mới nhất
     def __init__(self, path, width=640, height=480):
         self.cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
@@ -47,6 +47,7 @@ class CameraStream:
         self.thread.start()
 
     def _update(self):
+        # Luồng phụ liên tục đọc khung hình từ webcam và lưu trữ khung hình mới nhất
         fail_count = 0
         while self.running:
             if not self.cap.isOpened():
@@ -64,16 +65,18 @@ class CameraStream:
                 time.sleep(0.1)
 
     def read(self):
+        # Trả về khung hình mới nhất từ webcam, nếu không có khung hình nào thì trả về None
         with self.lock:
             return None if self.frame is None else self.frame.copy()
 
     def stop(self):
+        # Dừng luồng đọc khung hình và giải phóng tài nguyên của webcam
         self.running = False
         self.thread.join(timeout=1)
         self.cap.release()
 
 
-# Movement and camera-pitch letters are interpreted by the ESP32 firmware.
+# Lệnh điều khiển robot
 CMD_WALK = "w"
 CMD_STOP = "s"
 CMD_LEFT = "a"
@@ -87,8 +90,7 @@ CAM_CMD_NEUTRAL = "n"
 CAM_CMD_SCAN_UP = "r"
 CAM_CMD_SCAN_STOP = "x"
 
-# The ESP32 enforces a final 1.8 s scan limit.  Stop and return a little
-# earlier here so the normal vision path remains responsible for the return.
+# Các hằng số và trạng thái liên quan đến quét camera và nhận diện khuôn mặt
 CAMERA_SCAN_TIMEOUT_S = 1.5
 CAMERA_TARGET_LOST_S = 1.0
 CAMERA_HAND_CONFIRMATIONS = 2
