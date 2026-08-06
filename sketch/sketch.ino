@@ -77,10 +77,28 @@ void handle_face_expression(String expression) {
   }
 }
 
+bool is_supported_esp_command(char command) {
+  switch (command) {
+    case 'w': case 'b': case 's': case 'a': case 'd':
+    case 'p': case 'c': case 'g': case 'u':
+    case 'q': case 'j': case 'z': case 'e':
+    case 'f': case 'k':
+    case 'h': case 'l': case 'n':  // fixed camera positions
+    case 'r': case 'x':            // timed camera scan / stop-and-hold
+      return true;
+    default:
+      return false;
+  }
+}
+
 void send_motor_command(String command) {
-  // Prefixed framing ("CMD:" + char) ensures the ESP32 doesn't trigger on noise
+  // Send exactly one recognised command; framing prevents ESP32 noise from
+  // being interpreted as movement or a camera command.
+  if (command.length() != 1 || !is_supported_esp_command(command.charAt(0))) {
+    return;
+  }
   Serial1.print("CMD:");
-  Serial1.write(command.c_str());
+  Serial1.write(command.charAt(0));
   Serial1.write('\n');
 }
 

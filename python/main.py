@@ -84,6 +84,20 @@ CMD_STAND_UP = CMD_STOP
 CAM_CMD_UP = "h"
 CAM_CMD_DOWN = "l"
 CAM_CMD_NEUTRAL = "n"
+CAM_CMD_SCAN_UP = "r"
+CAM_CMD_SCAN_STOP = "x"
+
+# The ESP32 enforces a final 1.8 s scan limit.  Stop and return a little
+# earlier here so the normal vision path remains responsible for the return.
+CAMERA_SCAN_TIMEOUT_S = 1.5
+CAMERA_TARGET_LOST_S = 1.0
+CAMERA_HAND_CONFIRMATIONS = 2
+CAMERA_SCAN_FACE_CHECK_PERIOD_S = 0.25
+
+CAMERA_SCAN_IDLE = "IDLE"
+CAMERA_SCAN_SCANNING = "SCANNING"
+CAMERA_SCAN_LOCKED = "LOCKED"
+CAMERA_SCAN_RETURNING = "RETURNING"
 
 cam = CameraStream(camera_path)
 detector = HandGestureDetector(score_threshold=0.6, conf_threshold=0.6)
@@ -99,16 +113,115 @@ ball_tracker = BallTracker(
 
 
 python_cam_state = "N"
+camera_scan_state = CAMERA_SCAN_IDLE
+camera_scan_started_at = 0.0
+camera_scan_duration_s = 0.0
+camera_target_last_seen_at = 0.0
+camera_hand_confirmations = 0
+camera_return_complete_at = 0.0
 
 
 def set_cam_state(new_state):
-    """Set camera pitch only when the desired state changes."""
+    """Set fixed camera pitch only when a vision-controlled scan is idle."""
     global python_cam_state
+    if camera_scan_state != CAMERA_SCAN_IDLE:
+        return
     if new_state == python_cam_state:
         return
     command = {"U": CAM_CMD_UP, "D": CAM_CMD_DOWN, "N": CAM_CMD_NEUTRAL}[new_state]
     send_motor_command(command)
     python_cam_state = new_state
+
+
+def start_camera_scan(now):
+    """Begin a continuous upward scan after the camera sees a person's legs."""
+    global camera_scan_state, camera_scan_started_at, camera_hand_confirmations
+    global camera_scan_duration_s, python_cam_state, next_face_check_at
+    if camera_scan_state != CAMERA_SCAN_IDLE:
+        return
+    send_motor_command(CAM_CMD_SCAN_UP)
+    camera_scan_state = CAMERA_SCAN_SCANNING
+    camera_scan_started_at = now
+    camera_scan_duration_s = 0.0
+    camera_hand_confirmations = 0
+    # Do not wait for the normal, slower face-recognition interval after the
+    # lens starts moving.
+    next_face_check_at = now
+    # The ESP32 now owns the servo until it receives the matching return command.
+    python_cam_state = "N"
+
+
+def lock_camera_on_target(now):
+    """Stop the scan and retain the ESP32's measured upward travel time."""
+    global camera_scan_state, camera_scan_duration_s, camera_target_last_seen_at
+    if camera_scan_state != CAMERA_SCAN_SCANNING:
+        return
+    send_motor_command(CAM_CMD_SCAN_STOP)
+    camera_scan_state = CAMERA_SCAN_LOCKED
+    camera_scan_duration_s = max(0.0, now - camera_scan_started_at)
+    camera_target_last_seen_at = now
+
+
+def return_camera_from_scan(now):
+    """Ask the ESP32 to rotate down for exactly the recorded scan duration."""
+    global camera_scan_state, camera_hand_confirmations, camera_scan_duration_s
+    global python_cam_state
+    global camera_return_complete_at
+    if camera_scan_state in (CAMERA_SCAN_IDLE, CAMERA_SCAN_RETURNING):
+        return
+    # 'n' stops an active scan if necessary, then starts the timed reverse run.
+    send_motor_command(CAM_CMD_NEUTRAL)
+    # Keep fixed camera commands and new leg detections out of the UART until
+    # the ESP32 has had time to complete the matching reverse rotation.
+    travel_time = camera_scan_duration_s or max(0.0, now - camera_scan_started_at)
+    camera_return_complete_at = now + travel_time
+    camera_scan_state = CAMERA_SCAN_RETURNING
+    camera_hand_confirmations = 0
+    python_cam_state = "N"
+
+
+def update_camera_scan(legs_detected, hand_detected, face_detected, now):
+    """Advance the legs -> scan -> target -> timed-return camera state machine."""
+    global camera_scan_state, camera_hand_confirmations, camera_target_last_seen_at
+
+    if camera_scan_state == CAMERA_SCAN_IDLE:
+        if legs_detected:
+            start_camera_scan(now)
+            return "Scanning for hand/face"
+        return None
+
+    if camera_scan_state == CAMERA_SCAN_SCANNING:
+        if face_detected:
+            lock_camera_on_target(now)
+            return "Face found"
+        if hand_detected:
+            camera_hand_confirmations += 1
+            if camera_hand_confirmations >= CAMERA_HAND_CONFIRMATIONS:
+                lock_camera_on_target(now)
+                return "Hand found"
+        else:
+            camera_hand_confirmations = 0
+
+        if now - camera_scan_started_at >= CAMERA_SCAN_TIMEOUT_S:
+            return_camera_from_scan(now)
+            return "Scan timed out; returning"
+        return "Scanning for hand/face"
+
+    if camera_scan_state == CAMERA_SCAN_RETURNING:
+        if now >= camera_return_complete_at:
+            camera_scan_state = CAMERA_SCAN_IDLE
+            return "Camera returned"
+        return "Returning camera"
+
+    # Once locked, leave the lens at the detected target until it has been gone
+    # long enough to avoid returning during a brief dropped inference frame.
+    if hand_detected or face_detected:
+        camera_target_last_seen_at = now
+        return "Tracking hand/face"
+    if now - camera_target_last_seen_at >= CAMERA_TARGET_LOST_S:
+        return_camera_from_scan(now)
+        return "Target lost; returning"
+    return "Holding camera position"
 
 
 # Set this to False to allow gesture commands without a familiar face. Face
@@ -238,8 +351,14 @@ def main_loop():
 
         hands = detector.detect(frame)
         now = time.monotonic()
+        face_status = "none"
         if now >= next_face_check_at:
-            next_face_check_at = now + FACE_CHECK_PERIOD_S
+            face_period = (
+                CAMERA_SCAN_FACE_CHECK_PERIOD_S
+                if camera_scan_state == CAMERA_SCAN_SCANNING
+                else FACE_CHECK_PERIOD_S
+            )
+            next_face_check_at = now + face_period
             face_status, _ = face_gate.recognize(frame)
             if face_status == "familiar":
                 last_familiar_time = time.time()
@@ -250,6 +369,24 @@ def main_loop():
         command = None
         display_text = "NO HAND"
         posture_transition = False
+        legs_detected = False
+        if (
+            robot_state == STATE_STANDING
+            and camera_scan_state == CAMERA_SCAN_IDLE
+            and not hands
+            and ball_tracker.should_check_camera()
+        ):
+            person_box = ball_tracker.detect_person(frame)
+            legs_detected = (
+                person_box is not None and ball_tracker.is_legs_only(person_box)
+            )
+
+        scan_display = update_camera_scan(
+            legs_detected,
+            bool(hands),
+            face_status in ("familiar", "unfamiliar"),
+            now,
+        )
         if hands:
             landmarks = hands[0]["landmarks"]
             folded = {
@@ -328,20 +465,19 @@ def main_loop():
                     else COMMAND_COOLDOWN_S
                 )
                 command_cooldown_until = time.time() + cooldown
-            if robot_state == STATE_STANDING:
+            if robot_state == STATE_STANDING and camera_scan_state == CAMERA_SCAN_IDLE:
                 set_cam_state("N")
-        elif robot_state == STATE_STANDING and ball_tracker.should_check_camera():
-            person_box = ball_tracker.detect_person(frame)
-            if person_box is not None and ball_tracker.is_legs_only(person_box):
-                set_cam_state("U")
-                display_text = "Looking up for hands"
-            else:
-                set_cam_state("N")
+
+        if robot_state != STATE_STANDING:
+            return_camera_from_scan(now)
+        elif command is None and scan_display is not None:
+            display_text = scan_display
 
         _update_oled(display_text)
     except Exception:
         print("Loop Error:")
         traceback.print_exc()
+        return_camera_from_scan(time.monotonic())
         send_motor_command(CMD_STOP)
 
 

@@ -1,11 +1,5 @@
 """
-Hand gesture detection using OpenCV Zoo's MediaPipe-derived ONNX models
-(palm detector + hand landmark model). Pure cv.dnn — no onnxruntime, no
-mediapipe package, so this runs fine on Python 3.13.
-
-Requires mp_palmdet.py and mp_handpose.py (from opencv_zoo) to be
-importable, plus the two .onnx weight files, all in the same directory
-as noted in the setup instructions.
+Code phát hiện cử chỉ bàn tay bằng cách sử dụng mô hình MediaPipe Palm Detection và Hand Pose Estimation.
 """
 
 import os

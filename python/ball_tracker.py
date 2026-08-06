@@ -1,4 +1,8 @@
-"""Code phát hiện và đi theo bóng và người sử dụng YOLOv8n."""
+"""
+Code phát hiện vật thể sử dụng YOLOv8n.
+Nếu phát hiện bóng, xác định lệnh điều khiển di chuyển dựa trên vị trí của bóng trong khung hình.
+Nếu phát hiện người, 
+"""
 
 from __future__ import annotations
 
