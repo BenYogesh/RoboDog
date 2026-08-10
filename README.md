@@ -2,6 +2,9 @@
 
 Arduino UNO Q vision app for the RoboDog quadruped.
 
+For a guided explanation of the code layout and runtime dataflow, see
+[`docs/system-structure-dataflow.md`](docs/system-structure-dataflow.md).
+
 The Python app is `python/main.py` and uses this camera path:
 
 ```text
