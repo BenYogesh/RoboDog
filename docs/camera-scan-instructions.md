@@ -8,18 +8,24 @@ continuous-rotation servo connected to ESP32 GPIO 27.
 
 When the robot is standing and the camera sees a person whose bounding box
 contains only their legs, the UNO Q asks the ESP32 to rotate the camera upward.
-The vision app then looks for a face or hand:
+The path depends on `REQUIRE_FAMILIAR_FACE`:
 
-1. A face stops the scan immediately.
-2. A hand stops the scan after two consecutive hand detections, which reduces
-   false stops.
-3. The camera holds its position while the face or hand remains visible.
-4. When that target has been missing for one second, the ESP32 rotates the
-   servo in the reverse direction for the saved upward-scan time.
-5. If no target is found, the UNO Q starts the return after 1.5 seconds.
+1. When it is `True`, the upward scan looks only for a **familiar** face.
+2. When that familiar face is found and a hand is already visible, the camera
+   holds position for gesture recognition.
+3. When that familiar face is found but no hand is visible, the ESP32 stops,
+   then scans downward for the hand. That down-scan is limited to the elapsed
+   upward time, so it cannot intentionally pass the neutral view.
+4. A hand stops its current scan after two consecutive hand detections, which
+   reduces false stops. The camera holds while the hand remains visible.
+5. When the hand is missing for one second, the ESP32 returns only by the
+   remaining signed offset. For example, 0.9 s up then 0.6 s down returns for
+   about 0.3 s down, rather than the full 0.9 s.
+6. When `REQUIRE_FAMILIAR_FACE` is `False`, the robot skips the face stage and
+   scans upward only for a hand; faces do not stop that scan.
 
-The ESP32 also stops an uninterrupted upward scan after 1.8 seconds. This is
-a safety limit in case the UNO Q app or UART link stops responding.
+The ESP32 also stops any uninterrupted up or down scan after 1.8 seconds. This
+is a safety limit in case the UNO Q app or UART link stops responding.
 
 Because the SG90 is a continuous-rotation servo, it has no position feedback.
 The return is time-based, not an absolute angle measurement. A small drift is
@@ -58,9 +64,10 @@ followed by a newline.
 | --- | --- | --- |
 | `h` | Timed upward fixed-view step | Manual/fixed camera control |
 | `l` | Timed downward fixed-view step | Ball-mode camera control |
-| `n` | Return using saved scan time; otherwise request logical neutral | Target lost, scan timeout |
+| `n` | Return using the remaining signed scan offset; otherwise request logical neutral | Target lost, scan timeout |
 | `r` | Start continuous upward scan and start recording time | Legs-only person detection |
-| `x` | Stop scan, retain recorded time, and hold position | Face or confirmed hand detection |
+| `v` | Start continuous downward hand scan and subtract its time from the offset | Familiar face found without a hand |
+| `x` | Stop active scan, retain its signed time, and hold position | Familiar face or confirmed hand detection |
 
 `h`, `l`, and `n` are logical views only. A continuous-rotation servo cannot
 know its physical angle, so they are short timed movements rather than absolute
@@ -99,6 +106,7 @@ CAMERA_SCAN_TIMEOUT_S = 1.5
 CAMERA_TARGET_LOST_S = 1.0
 CAMERA_HAND_CONFIRMATIONS = 2
 CAMERA_SCAN_FACE_CHECK_PERIOD_S = 0.25
+CAMERA_RETURN_SETTLE_S = 0.1
 ```
 
 - Keep `CAMERA_SCAN_TIMEOUT_S` shorter than `CAMERA_SCAN_MAX_MS / 1000`.
@@ -108,6 +116,9 @@ CAMERA_SCAN_FACE_CHECK_PERIOD_S = 0.25
   present but briefly occluded.
 - Lower `CAMERA_SCAN_FACE_CHECK_PERIOD_S` only if the UNO Q has enough CPU for
   more frequent face recognition.
+- `CAMERA_RETURN_SETTLE_S` is an extra software guard after the calculated
+  return time. It prevents a new leg detection from interrupting the ESP32 as
+  the continuous servo reaches neutral.
 
 ## Deployment And Test Procedure
 
@@ -117,16 +128,22 @@ CAMERA_SCAN_FACE_CHECK_PERIOD_S = 0.25
 3. Power the camera servo from its external 5 V supply and confirm the common
    ground connection.
 4. Start the vision app. Check that the OLED does not report `CAM FAILED`.
-5. Stand where the camera sees only your legs. The OLED should report
-   `Scanning for hand/face`, and the lens should move upward.
-6. Raise a hand or let your face enter the frame. The lens should stop and the
-   OLED should report `Hand found` or `Face found`.
-7. Move out of view. After approximately one second, the OLED should report
-   `Target lost; returning`, and the servo should reverse for the saved scan
-   time.
-8. Repeat with no hand or face visible. It should report
-   `Scan timed out; returning` after about 1.5 seconds.
-9. If the direction is reversed, swap `CAMERA_SERVO_UP_US` and
+5. With `REQUIRE_FAMILIAR_FACE = True`, stand where the camera sees only your
+   legs. The OLED should report `Scanning for familiar face`, and the lens
+   should move upward.
+6. Let a familiar face enter the frame without raising a hand. The OLED should
+   report `Familiar face found; scanning down for hand`; the lens should stop
+   briefly, then move down. It should move down for no longer than it moved up.
+7. Raise a hand during that down-scan. The OLED should report `Hand found`.
+   Move the hand out of view; after about one second, the return should use only
+   the remaining up-minus-down time.
+8. Set `REQUIRE_FAMILIAR_FACE = False` and repeat. The OLED should report
+   `Scanning for hand`; a face alone must not stop the scan, but a confirmed
+   hand must stop it.
+9. Repeat with no expected target visible. It should report a face- or
+   hand-scan timeout and return after about 1.5 seconds or sooner for the
+   down-scan.
+10. If the direction is reversed, swap `CAMERA_SERVO_UP_US` and
    `CAMERA_SERVO_DOWN_US`, flash the ESP32 again, and repeat the test.
 
 ## Troubleshooting

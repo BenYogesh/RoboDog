@@ -99,9 +99,10 @@ Danh sách lệnh đang được Python sử dụng:
 | `d` | Quay phải | Chỉ sang phải | Đối tượng ở bên phải |
 | `q` | Ngồi | Chỉ xuống khi đang đứng <br> Chỉ lên khi đang nằm | |
 | `c` | Nằm | Chỉ xuống khi đang ngồi |
-| `n` | Camera trở về vị trí ban đầu | | Thoát trạng thái tìm đối tượng |
-| `r` | Ngẩng camera lên từ từ | | Ngẩng lên để tìm mặt hoặc bàn tay |
-| `x` | Dừng ngẩng camera | | Đã tìm thấy bàn tay |
+| `n` | Camera quay về trung tính theo thời gian còn lại | | Mất mục tiêu hoặc quét quá thời gian |
+| `r` | Bắt đầu quét camera đi lên theo thời gian | | Tìm khuôn mặt quen, hoặc bàn tay khi tắt yêu cầu khuôn mặt |
+| `v` | Bắt đầu quét camera xuống để tìm bàn tay | | Đã tìm thấy khuôn mặt quen nhưng chưa thấy bàn tay |
+| `x` | Dừng quét camera đang hoạt động | | Đã tìm thấy khuôn mặt quen hoặc bàn tay được xác nhận |
 
 ## Các chế độ trạng thái robot
 

@@ -84,7 +84,7 @@ bool is_supported_esp_command(char command) {
     case 'q': case 'j': case 'z': case 'e':
     case 'f': case 'k':
     case 'h': case 'l': case 'n':  // fixed camera positions
-    case 'r': case 'x':            // timed camera scan / stop-and-hold
+    case 'r': case 'v': case 'x':  // timed up/down camera scan / stop-and-hold
       return true;
     default:
       return false;
