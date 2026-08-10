@@ -5,6 +5,10 @@ Arduino UNO Q vision app for the RoboDog quadruped.
 For a guided explanation of the code layout and runtime dataflow, see
 [`docs/system-structure-dataflow.md`](docs/system-structure-dataflow.md).
 
+For the SG90 continuous-servo camera scan feature, including wiring, tuning,
+and board-side testing, see
+[`docs/camera-scan-instructions.md`](docs/camera-scan-instructions.md).
+
 The Python app is `python/main.py` and uses this camera path:
 
 ```text
