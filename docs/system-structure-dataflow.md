@@ -1,4 +1,4 @@
-# Cấu trúc code và luồng dữ liệu RoboDog
+# Cấu trúc code và luồng dữ liệu RoboDog trên Arduino Uno Q
 ## Kiến trúc thượng tầng
 Chương trình chính của robot được chia làm 2 nửa, chạy trên 2 máy tính nhúng khác nhau:
 
@@ -7,24 +7,28 @@ Chương trình chính của robot được chia làm 2 nửa, chạy trên 2 m�
   - Chip STM32U585: Chạy hệ điều hành Arduino Zephyr, lập trình bằng ngôn ngữ C++. Chức năng làm cầu nối từ chương trình xử lý hình ảnh tới chương trình xử lý vận động trên chip ESP32 thông qua Serial. Đồng thời hiển thị một số thông tin cần thiết lên màn hình OLED SSD1306 và ma trận LED có sẵn trên bảng mạch.
 - **ESP32S**:
   - Nhận tín hiệu từ Arduino Uno Q, kết hợp với việc đọc cảm ứng góc nghiêng MPU6050 và thuật toán PID để tinh chỉnh sai số, từ đó gửi tín hiệu điều khiển các servo ST3215 để robot chuyển động.
+ 
+Hướng dẫn này sẽ chỉ nói tới phần code trên Arduino Uno Q.
+
+## Luồng dữ liệu tổng quan trên Uno Q
 
 ```mermaid
 flowchart TD
-    Camera["Webcam"] --> Stream["CameraStream in python/main.py"]
+    Camera["Webcam"] --> Stream["CameraStream trong <br>python/main.py"]
     Stream --> Loop["main_loop"]
     Loop --> Hands["HandGestureDetector"]
     Loop --> Face["FaceGate"]
     Loop --> Ball["BallTracker"]
-    Hands --> Decide["Gesture and posture decisions"]
-    Face --> Gate["Familiar-face gate and LED expression"]
-    Ball --> Chase["Ball/person decisions"]
-    Decide --> Bridge["Python Bridge calls"]
+    Hands --> Decide["Nhận diện <br>cử chỉ và khuôn mặt"]
+    Face --> Gate["Phát hiện người quen"]
+    Ball --> Chase["Đuổi theo đối tượng"]
+    Decide --> Bridge["Giao tiếp Bridge"]
     Gate --> Bridge
     Chase --> Bridge
-    Bridge --> Sketch["sketch/sketch.ino Bridge handlers"]
-    Sketch --> OLED["OLED status text"]
-    Sketch --> Matrix["UNO Q LED matrix face"]
-    Sketch --> UART["Serial1: CMD:<char> to ESP32"]
+    Bridge --> Sketch["sketch/sketch.ino <br>xử lý Bridge"]
+    Sketch --> OLED["Hiển thị trạng thái <br>lên OLED"]
+    Sketch --> Matrix["Hiển thị lên <br>ma trận LED của Uno Q"]
+    Sketch --> UART["Gửi tín hiệu <br>tới ESP32 qua Serial1"]
 ```
 
 ## Chỉ mục các file code
