@@ -9,6 +9,9 @@ For the SG90 continuous-servo camera scan feature, including wiring, tuning,
 and board-side testing, see
 [`docs/camera-scan-instructions.md`](docs/camera-scan-instructions.md).
 
+For the ESP32 leg kinematics, gait tuning, balancing, and safe gait tests, see
+[`docs/esp32-gait-control.md`](docs/esp32-gait-control.md).
+
 The Python app is `python/main.py` and uses this camera path:
 
 ```text
