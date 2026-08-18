@@ -5,9 +5,9 @@ Arduino UNO Q vision app for the RoboDog quadruped.
 For a guided explanation of the code layout and runtime dataflow, see
 [`docs/system-structure-dataflow.md`](docs/system-structure-dataflow.md).
 
-For Vietnamese pseudocode covering the vision/control path without the speech
-recognition test, see
-[`docs/project-pseudocode.md`](docs/project-pseudocode.md).
+For compact pseudocode of the vision/control path, see
+[`docs/project-pseudocode.md`](docs/project-pseudocode.md) or the Vietnamese
+version at [`docs/project-pseudocode.vi.md`](docs/project-pseudocode.vi.md).
 
 For the SG90 continuous-servo camera scan feature, including wiring, tuning,
 and board-side testing, see
