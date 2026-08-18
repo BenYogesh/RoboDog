@@ -3,3 +3,4 @@
 dogvenv/
 __pycache__/
 *.pyc
+esp32_speech_test/**/secrets.h

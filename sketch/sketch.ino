@@ -102,6 +102,23 @@ void send_motor_command(String command) {
   Serial1.write('\n');
 }
 
+bool is_supported_test_sound(const String &sound) {
+  return sound == "beep" || sound == "success" || sound == "error";
+}
+
+void play_test_sound(String sound) {
+  sound.trim();
+  sound.toLowerCase();
+  if (!is_supported_test_sound(sound)) {
+    return;
+  }
+
+  // The ESP32 test firmware handles the sound locally through the MAX98357A.
+  Serial1.print("PLAY:");
+  Serial1.print(sound);
+  Serial1.write('\n');
+}
+
 void setup() {
   Serial1.begin(115200); // hardware UART on D0(RX)/D1(TX) -> ESP32
 
@@ -117,6 +134,7 @@ void setup() {
   Bridge.begin();
   Bridge.provide_safe("update_oled", handle_gesture);
   Bridge.provide_safe("send_motor_command", send_motor_command);
+  Bridge.provide_safe("play_test_sound", play_test_sound);
   Bridge.provide_safe("update_face_matrix", handle_face_expression);
 }
 

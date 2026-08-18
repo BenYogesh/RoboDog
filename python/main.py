@@ -2,6 +2,18 @@
 
 # Khai báo các thư viện cần thiết
 import os
+
+# App Lab launches this file as the Linux-side entrypoint. Set this toggle to
+# True for the speech-only test so it runs inside App Lab's Python runtime,
+# where arduino.app_utils.Bridge is available. Set it back to False to resume
+# the normal vision application.
+RUN_SPEECH_TEST_ONLY = False
+if RUN_SPEECH_TEST_ONLY:
+    from speech_test import main as run_speech_test
+
+    run_speech_test()
+    raise SystemExit
+
 import threading
 import time
 import traceback
