@@ -1,5 +1,6 @@
 name: DogVision
 description: "\"/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0\""
-ports: []
+ports:
+  - 3333
 bricks: []
 icon: 🐶

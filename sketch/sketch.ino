@@ -110,16 +110,22 @@ void play_test_sound(String sound) {
   sound.trim();
   sound.toLowerCase();
   if (!is_supported_test_sound(sound)) {
+    Serial.print("UNO Q rejected sound: ");
+    Serial.println(sound);
     return;
   }
 
   // The ESP32 test firmware handles the sound locally through the MAX98357A.
+  Serial.print("UNO Q UART TX: PLAY:");
+  Serial.println(sound);
   Serial1.print("PLAY:");
   Serial1.print(sound);
   Serial1.write('\n');
+  Serial1.flush();
 }
 
 void setup() {
+  Serial.begin(115200);
   Serial1.begin(115200); // hardware UART on D0(RX)/D1(TX) -> ESP32
 
   Wire.begin();

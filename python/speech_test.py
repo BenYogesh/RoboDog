@@ -32,6 +32,14 @@ INPUT_SAMPLE_RATE = 24000
 DEFAULT_AUDIO_PORT = 3333
 MAX_AUDIO_FRAME_BYTES = 64 * 1024
 ALLOWED_SOUNDS = {"beep", "success", "error"}
+# This is a deterministic hardware test. Once the voice turn is detected, make
+# the model emit the sound tool call instead of allowing a text-only reply.
+# Set SPEECH_TEST_FORCE_TOOL=0 later if unrelated speech must be ignored.
+FORCE_SOUND_TOOL = os.getenv("SPEECH_TEST_FORCE_TOOL", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 
 REALTIME_INSTRUCTIONS = (
@@ -105,6 +113,9 @@ class RealtimeSpeechClient:
                                 "type": "audio/pcm",
                                 "rate": INPUT_SAMPLE_RATE,
                             },
+                            "transcription": {
+                                "model": "gpt-4o-mini-transcribe",
+                            },
                             "turn_detection": {"type": "semantic_vad"},
                         }
                     },
@@ -125,9 +136,13 @@ class RealtimeSpeechClient:
                             },
                         }
                     ],
-                    "tool_choice": "auto",
+                    "tool_choice": "required" if FORCE_SOUND_TOOL else "auto",
                 },
             },
+        )
+        print(
+            "Realtime tool mode: "
+            + ("required" if FORCE_SOUND_TOOL else "auto")
         )
 
     def _on_message(self, _ws: websocket.WebSocketApp, message: str) -> None:
@@ -141,6 +156,8 @@ class RealtimeSpeechClient:
             print(event.get("delta", ""), end="", flush=True)
         elif event_type == "response.output_text.done":
             print()
+        elif event_type == "conversation.item.input_audio_transcription.completed":
+            print(f"Realtime transcript: {event.get('transcript', '')}")
         elif event_type in {"response.output_item.done", "conversation.item.done"}:
             item = event.get("item", {})
             if item.get("type") == "function_call":
@@ -153,6 +170,18 @@ class RealtimeSpeechClient:
                     "arguments": event.get("arguments", "{}"),
                 }
             )
+        elif event_type == "response.done":
+            response = event.get("response", {})
+            if response.get("status") not in {None, "completed"}:
+                print(
+                    f"Realtime response status: {response.get('status')} "
+                    f"error={response.get('status_details')}"
+                )
+            # Fallback for a complete response whose output item was not
+            # surfaced separately by the websocket client/server combination.
+            for item in response.get("output", []):
+                if item.get("type") == "function_call":
+                    self._handle_function_call(item)
         elif event_type == "error":
             print(f"Realtime error: {json.dumps(event)}")
 
@@ -172,6 +201,11 @@ class RealtimeSpeechClient:
         if not call_id or call_id in self._handled_call_ids:
             return
         self._handled_call_ids.add(call_id)
+
+        print(
+            f"Realtime tool call: {item.get('name', 'unknown')} "
+            f"arguments={item.get('arguments', '{}')}"
+        )
 
         try:
             arguments = json.loads(item.get("arguments", "{}"))

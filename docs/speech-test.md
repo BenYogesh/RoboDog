@@ -71,11 +71,25 @@ Do not put that value in this repository.
 3. Press **Run** in App Lab. App Lab installs the Python dependency from
    `python/requirements.txt` and starts the speech test.
 
+   The project manifest exposes TCP port 3333 to the LAN:
+
+   ```yaml
+   ports:
+     - 3333
+   ```
+
+   This is required because the Python process runs inside the App Lab
+   runtime; without the port declaration, the ESP32 cannot reach the listener.
+
 4. Confirm the App Lab console shows:
 
    ```text
    Listening for ESP32 PCM audio on 0.0.0.0:3333.
    ```
+
+   The speech test currently uses a required Realtime tool call so a detected
+   voice turn produces a deterministic hardware command. It also prints the
+   Realtime transcript and tool-call arguments for diagnosis.
 
 5. Flash and start `esp32_speech_test/speech_test/speech_test.ino`.
 6. Say one of these commands near the INMP441:
@@ -91,8 +105,10 @@ environment for this mode. App Lab installs `python/requirements.txt` into
 the runtime that provides `arduino.app_utils.Bridge`.
 
 The UNO Q terminal should show `UNO Q audio RX` with PCM frame counts and
-microphone levels, followed by `UNO Q sent command to ESP32`. The ESP32 USB
-serial monitor should show `ACK:CMD_RECEIVED`, `ACK:WAV_STARTED`, and
+microphone levels, followed by a Realtime transcript, `Realtime tool call`,
+and `UNO Q sent command to ESP32`. The UNO Q MCU serial output should show
+`UNO Q UART TX: PLAY:<sound>`. The ESP32 USB serial monitor should show
+`ACK:CMD_RECEIVED`, `ACK:WAV_STARTED`, and
 `SOUND_DONE`. These messages identify whether the fault is before or after
 the command reaches the ESP32.
 
