@@ -167,6 +167,7 @@ class RealtimeSpeechClient:
                 {
                     "type": "function_call",
                     "call_id": event.get("call_id"),
+                    "name": event.get("name", "play_sound"),
                     "arguments": event.get("arguments", "{}"),
                 }
             )
