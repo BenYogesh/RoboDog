@@ -1,10 +1,4 @@
-# Pseudocode rút gọn cho hệ thống RoboDog
-
-Tài liệu này tóm tắt code vision/control chính của RoboDog dưới dạng
-pseudocode ngắn gọn. Nội dung bao gồm vòng lặp camera/perception bên Python,
-sketch Bridge trên Arduino UNO Q, nhận diện khuôn mặt, cử chỉ tay, camera scan,
-và đuổi bóng. Nhánh thử nghiệm nhận diện giọng nói được tách riêng và không
-được mô tả ở đây; xem `docs/speech-test.md` nếu cần workflow đó.
+# Tóm tắt code cho hệ thống RoboDog
 
 ## Tổng quan hệ thống
 
@@ -16,7 +10,7 @@ Sketch Arduino UNO Q:
     khởi động OLED và ma trận LED
     đăng ký các hàm Bridge cho Python gọi
 
-Ứng dụng Python:
+Ứng dụng Python Arduino Uno Q:
     mở camera USB
     tải model bàn tay, khuôn mặt, YOLO
     tạo biến trạng thái robot và camera
@@ -33,35 +27,23 @@ LẶP:
 ## Các file chính
 
 ```text
-app.yaml
-    khai báo metadata DogVision và port runtime
-
-sketch/sketch.yaml
-    khai báo platform Arduino và thư viện SSD1306Ascii
-
 sketch/sketch.ino
-    nhận Bridge call, cập nhật OLED/LED matrix, chuyển lệnh sang ESP32
+    nhận Bridge call từ Python, cập nhật OLED/LED matrix, chuyển lệnh sang ESP32
 
 python/main.py
-    bộ điều phối chính của ứng dụng vision-control
+    bộ điều phối chính của ứng dụng
 
 python/detector.py
-    wrapper nhận diện bàn tay, trả về 21 landmarks mỗi bàn tay
-
-python/hand_models/mp_palmdet.py
-    tiền xử lý, inference, hậu xử lý cho palm detector
-
-python/hand_models/mp_handpose.py
-    ước lượng landmark bàn tay từ palm detection
+    nhận diện bàn tay, trả về cử chỉ được phát hiện
 
 python/face_gate.py
-    nhận diện khuôn mặt quen và kiểm soát quyền điều khiển
+    nhận diện khuôn mặt người quen để xác định quyền điều khiển
 
 python/enroll_faces.py
-    tạo known_faces_db.json từ ảnh khuôn mặt quen
+    trích xuất dữ liệu khuôn mặt người quen known_faces_db.json
 
 python/ball_tracker.py
-    nhận diện bóng/người bằng YOLO và quyết định lệnh đuổi bóng
+    nhận diện bóng/người và quyết định lệnh đuổi theo mục tiêu
 ```
 
 ## Sketch Arduino UNO Q
@@ -71,45 +53,40 @@ SETUP:
     mở USB Serial để debug
     mở Serial1 tốc độ 115200 cho ESP32
     khởi động OLED I2C
-    khởi động ma trận LED với mặt neutral
-    Bridge.begin()
-    đăng ký "update_oled" -> handle_gesture
-    đăng ký "send_motor_command" -> send_motor_command
-    đăng ký "update_face_matrix" -> handle_face_expression
+    khởi động ma trận LED
+    khởi động Bridge kết nối giữa hàm Arduino -> hàm Python
+    kết nối update_oled -> handle_gesture
+    kết nối send_motor_command -> send_motor_command
+    kết nối update_face_matrix -> handle_face_expression
 
 LOOP:
-    thư viện Bridge tự polling
-```
+    cập nhật Bridge 
 
-```text
-handle_gesture(text):
-    xóa OLED
-    in text
+    handle_gesture(text):
+        xóa OLED
+        in text
 
-handle_face_expression(expression):
-    nếu expression == "smiley": vẽ mặt cười
-    nếu expression == "indifferent": vẽ mặt thờ ơ
-    ngược lại: vẽ mặt neutral
+    handle_face_expression(expression):
+        nếu expression == "smiley": vẽ mặt cười
+        nếu expression == "indifferent": vẽ mặt thờ ơ
+        ngược lại: vẽ mặt neutral
 
-drawMatrixFrame(frame_8x13):
-    đóng gói 104 bit LED vào bốn số 32-bit
-    nạp frame đã đóng gói vào ma trận LED
+    drawMatrixFrame(frame_8x13):
+        đóng gói 104 bit LED vào bốn số 32-bit
+        nạp frame đã đóng gói vào ma trận LED
 
-send_motor_command(command):
-    bỏ qua nếu command không đúng 1 ký tự hoặc không nằm trong whitelist
-    Serial1 gửi "CMD:" + command + xuống dòng
-```
+    send_motor_command(command):
+        bỏ qua nếu command không đúng 1 ký tự hoặc không nằm trong whitelist
+        Serial1 gửi "CMD:" + command + xuống dòng
 
-Các lệnh Python đang dùng:
-
-```text
+    Các lệnh Python đang dùng:
 w đi thẳng          s dừng / đứng        a rẽ trái
 d rẽ phải           q ngồi               c nằm
 h camera nâng       l camera hạ          n neutral / quay về
 r scan lên          v scan xuống         x dừng scan và giữ vị trí
 ```
 
-## Khởi động Python
+## Chương trình Python
 
 ```text
 cv2.setNumThreads(1)
@@ -124,34 +101,24 @@ ball_tracker = BallTracker(yolov8n.onnx, các lệnh di chuyển)
 khởi tạo:
     robot_state = STANDING
     camera_scan_state = IDLE
-    timer cooldown
-    timer nhận diện khuôn mặt
-    timer và offset camera scan
+    bộ đếm thời gian cooldown giữa 2 lần nhận lệnh
+    bộ đếm thời gian nhận diện khuôn mặt
+    bộ đếm thời gian và offset camera scan
 
-App.run(user_loop=main_loop)
-```
-
-## CameraStream
-
-```text
-CameraStream:
-    mở camera V4L2 ở 640x480
+Lớp CameraStream:
+    mở trình điểu khiển camera V4L2 ở độ phân giải 640x480
     đặt buffer size = 1
     nếu camera lỗi, hiển thị "CAM FAILED" trên OLED
     chạy thread nền:
         liên tục đọc frame camera
         chỉ lưu frame mới nhất trong lock
 
-read():
-    trả về bản copy frame mới nhất, hoặc None
+    read():
+        trả về bản copy frame mới nhất, hoặc None
 
-stop():
-    dừng thread và giải phóng camera
-```
+    stop():
+        dừng luồng stream và giải phóng camera
 
-## Main Loop
-
-```text
 main_loop():
     frame = cam.read()
     nếu không có frame: return
@@ -197,7 +164,7 @@ khi lỗi:
     gửi lệnh stop
 ```
 
-## State Machine Cử Chỉ
+## Chuyển đổi trạng thái
 
 ```text
 STANDING:
@@ -206,7 +173,7 @@ STANDING:
     chỉ trái   -> a, giữ STANDING
     chỉ phải   -> d, giữ STANDING
     chỉ xuống  -> q, state SITTING
-    nắm tay    -> s, start BallTracker, state CHASING, camera xuống
+    nắm tay    -> s, chạy BallTracker, state CHASING, camera hạ xuống
 
 SITTING:
     chỉ lên    -> s, state STANDING
@@ -232,21 +199,21 @@ is_pointing_down(landmarks):
     yêu cầu hướng ngón trỏ chủ yếu dọc và đi xuống
 ```
 
-## Face Gate
+## Nhận diện khuôn mặt
 
 ```text
 Enroll:
     với mỗi thư mục người trong python/known_faces:
         đọc từng ảnh
         tìm khuôn mặt lớn nhất bằng YuNet
-        align mặt và trích xuất embedding SFace
-        lấy trung bình embedding cho người đó
-    ghi name -> averaged embedding vào known_faces_db.json
+        chỉnh mặt về vị trí cân đối và trích xuất dữ liệu bằng SFace
+        lấy trung bình dữ liệu lấy từ tất cả các ảnh của người đó
+    ghi tên và trung bình dữ liệu vào known_faces_db.json
 ```
 
 ```text
-Runtime:
-    load known_faces_db.json
+Trong khi chạy:
+    tải known_faces_db.json
     định kỳ tìm mặt bằng YuNet
     nếu không thấy mặt: trả về "none"
     chọn mặt lớn nhất
@@ -256,51 +223,52 @@ Runtime:
     ngược lại: trả về "unfamiliar"
 
 commands_currently_allowed():
+    (khóa yêu cầu thấy mặt người quen để nghe lệnh hay không)
     nếu REQUIRE_FAMILIAR_FACE là false: return true
     chỉ return true trong FAMILIAR_GRACE_S sau lần thấy mặt quen gần nhất
 ```
 
-## State Machine Camera Scan
+## Chuyển đổi trạng thái khi Camera tìm khuôn mặt
 
 ```text
 IDLE:
     nếu phát hiện chỉ thấy chân người:
-        reset offset thời gian
-        scan lên bằng r
+        reset bộ đếm thời gian
+        ngẩng cam lên
         state = FACE_SCANNING nếu cần mặt quen, ngược lại HAND_SCANNING
 
 FACE_SCANNING:
     nếu thấy mặt quen:
-        dừng scan bằng x
-        lưu thời gian scan lên
+        dừng ngẩng cam
+        lưu thời gian ngẩng lên
         nếu đã thấy tay: state = LOCKED
-        nếu chưa thấy tay: scan xuống bằng v, tối đa bằng thời gian đã scan lên
+        nếu chưa thấy tay: hạ dần camera xuống, tối đa bằng thời gian đã ngẩng lên
     nếu timeout:
-        quay về bằng n
+        quay về vị trí ban đầu
         state = RETURNING
 
 HAND_SCANNING:
-    nếu thấy tay đủ số lần liên tiếp:
-        dừng scan bằng x
-        cập nhật offset camera
+    nếu thấy tay:
+        dừng di chuyển
+        cập nhật thời gian di chuyển, đã đi lên rồi xuống bao nhiêu
         state = LOCKED
     nếu hết giới hạn thời gian:
-        quay về bằng n
+        quay về vị trí ban đầu
         state = RETURNING
 
 LOCKED:
     giữ vị trí camera khi còn thấy tay
     nếu mất mục tiêu đủ lâu:
-        quay về bằng n
+        quay về vị trí ban đầu
         state = RETURNING
 
 RETURNING:
-    chờ abs(offset) + thời gian ổn định
-    reset offset
+    chờ một quãng bằng thời gian di chuyển đã lưu, thêm một khoảng để ổn định
+    reset bộ đếm thời gian
     state = IDLE
 ```
 
-## Pipeline Nhận Diện Tay
+## Nhận diện cử chỉ tay
 
 ```text
 detector.detect(frame):
@@ -327,17 +295,15 @@ MPHandPose:
     đổi landmarks về tọa độ frame gốc
 ```
 
-## BallTracker
+## Theo đuổi mục tiêu
 
 ```text
-Prediction:
-    letterbox frame về input YOLO
+tiền xử lý:
+    đóng khung lại frame theo yêu cầu input của YOLO
     chạy yolov8n.onnx bằng OpenCV DNN
     chuẩn hóa shape output
     đổi bbox model về tọa độ frame gốc
-```
 
-```text
 detect_ball(frame):
     giữ candidate lớp sports ball đủ ngưỡng
     giữ top class diagnostic cho OLED/debug
@@ -351,9 +317,7 @@ detect_person(frame):
 
 is_legs_only(person_box):
     true nếu box chạm gần mép trên và đủ cao
-```
 
-```text
 command_for_frame(frame):
     ball = detect_ball(frame)
     nếu thấy bóng:
@@ -363,12 +327,12 @@ command_for_frame(frame):
         nếu bóng lệch phải: return right
         return walk
 
-    nếu chưa từng thấy bóng và quá timeout: return stop, "gave_up"
+    nếu chưa từng thấy bóng và quá thời gian: return stop, "gave_up"
     nếu đã thấy bóng nhưng mất quá lâu: return stop, "gave_up"
     quay theo phía cuối cùng đã thấy bóng
 ```
 
-## Luồng Vision End-To-End
+## Luồng dữ liệu hình ảnh
 
 ```text
 camera frame
@@ -385,7 +349,7 @@ camera frame
     -> ESP32 nhận CMD:<ký tự>
 ```
 
-## Runtime Assets
+## Các model nhận diện sử dụng
 
 ```text
 python/yolov8n.onnx
