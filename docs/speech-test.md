@@ -1,21 +1,27 @@
-# Speech-only test build
+# Speech recognition and audio test build
 
-This test intentionally bypasses the existing camera, gait, and vision code.
+The speech service can run by itself for hardware diagnosis, or in the normal
+vision application. In integrated mode, hand-gesture detection is retired:
+speech movement commands are accepted without familiar-face gating. The normal
+app still uses face recognition for its LED expression and familiar-face sound.
 
 ```mermaid
 flowchart LR
   M[INMP441] -->|24 kHz PCM16 over TCP| Q[UNO Q Linux]
   Q -->|Realtime WebSocket| O[gpt-realtime-2.1-mini]
-  O -->|play_sound function call| Q
+  O -->|move_robot function call| Q
   Q -->|SND:B/S/E\n over Serial1| E[ESP32]
   E --> A[MAX98357A]
 ```
 
 ## Files
 
-- `python/speech_test.py`: UNO Q TCP receiver and Realtime client.
+- `python/speech_test.py`: UNO Q TCP receiver, Realtime client, movement tool,
+  and standalone sound-test entrypoint.
+- `python/main.py`: normal vision application with speech running in the
+  background; speech movement commands do not require a familiar face.
 - `sketch/sketch.ino`: adds the safe `play_test_sound` Bridge function.
-- `esp32_speech_test/speech_test.ino`: one-microphone capture and local tone playback.
+- `esp32_speech_test/speech_test/speech_test.ino`: one-microphone capture and local tone playback.
 
 ## Wiring for this first test
 
@@ -58,13 +64,13 @@ Do not put that value in this repository.
 ## Run
 
 1. Flash the normal UNO Q sketch after the added Bridge function is compiled.
-2. In `python/main.py`, temporarily set:
+2. For the standalone sound-only test, temporarily set in `python/main.py`:
 
    ```python
    RUN_SPEECH_TEST_ONLY = True
    ```
 
-   This makes App Lab launch the speech-only process inside its own Python
+   This makes App Lab launch only the speech process inside its own Python
    runtime, where `arduino.app_utils.Bridge` is available. It does not run the
    normal camera/vision loop while enabled.
 
@@ -99,6 +105,25 @@ Do not put that value in this repository.
 
 7. Set `RUN_SPEECH_TEST_ONLY = False` and press **Run** again to restore the
    normal application.
+
+## Integrated normal application
+
+Leave `RUN_SPEECH_TEST_ONLY = False`. The normal application starts the same
+TCP listener and Realtime session in the background. It exposes `move_robot`
+to the model and maps these tool commands to the existing ESP32 gait bytes:
+
+| Speech tool command | UART byte | Examples |
+| --- | --- | --- |
+| `forward` / `backward` | `w` / `b` | “walk forward”, “đi tới” |
+| `turn_left` / `turn_right` | `a` / `d` | “turn left”, “quay phải” |
+| `stop` / `hold` | `s` / `z` | “stop”, “giữ nguyên” |
+| `sit` / `prone` / `stand` | `q` / `c` / `s` | “ngồi xuống”, “nằm xuống” |
+| `chase` | ball-tracking mode | “follow the ball”, “đuổi bóng” |
+| `wave` / `bounce` / `jump` | `g` / `u` / `j` | matching English/Vietnamese words |
+
+The UNO Q requests `success` after every accepted speech movement and `beep`
+once when face recognition changes into the familiar state. These are local
+events, so the model never needs to call a sound tool in integrated mode.
 
 Do not install packages into the system Python or a separate virtual
 environment for this mode. App Lab installs `python/requirements.txt` into
@@ -170,3 +195,9 @@ If the ESP32 connects to Wi-Fi but cannot connect to TCP port 3333, verify the
 UNO Q IP address in `secrets.h`, that both devices are on the same LAN, that
 the UNO Q process printed the listening message, and that no other process is
 already using port 3333.
+
+The repository currently contains the `SND:` parser and LittleFS playback in
+the separate `esp32_speech_test` sketch, but not the main ESP32 gait sketch.
+Before running the integrated robot build, merge that same `SND:B/S/E` parser
+and `/sounds/*.wav` playback into the gait firmware so it can accept both the
+existing `CMD:<char>` frames and the new sound frames.

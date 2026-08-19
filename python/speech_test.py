@@ -1,8 +1,9 @@
-"""Standalone UNO Q speech-command test.
+"""UNO Q Realtime speech service.
 
 The ESP32 sends length-prefixed, little-endian PCM16 mono frames over TCP.
-This process forwards those frames to the OpenAI Realtime WebSocket and lets
-the model call the local ``play_sound`` function for approved sounds.
+This process forwards those frames to the OpenAI Realtime WebSocket. The
+normal robot application exposes a ``move_robot`` function; the standalone
+test can instead expose the local ``play_sound`` function.
 
 Run this file directly on the UNO Q Linux side. It intentionally does not
 start the existing camera/vision application.
@@ -21,7 +22,7 @@ import struct
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 import websocket
 from arduino.app_utils import Bridge
@@ -32,6 +33,26 @@ INPUT_SAMPLE_RATE = 24000
 DEFAULT_AUDIO_PORT = 3333
 MAX_AUDIO_FRAME_BYTES = 64 * 1024
 ALLOWED_SOUNDS = {"beep", "success", "error"}
+MOVEMENT_COMMANDS = {
+    "forward": "w",
+    "backward": "b",
+    "turn_left": "a",
+    "turn_right": "d",
+    "crab_left": "e",
+    "crab_right": "f",
+    "pace": "p",
+    "stop": "s",
+    "hold": "z",
+    "sit": "q",
+    "prone": "c",
+    "stand": "s",
+    "wave": "g",
+    "bounce": "u",
+    "jump": "j",
+    "center": "k",
+    # ``chase`` is handled by main.py because it starts the camera/ball state.
+    "chase": "chase",
+}
 # This is a deterministic hardware test. Once the voice turn is detected, make
 # the model emit the sound tool call instead of allowing a text-only reply.
 # Set SPEECH_TEST_FORCE_TOOL=0 later if unrelated speech must be ignored.
@@ -42,7 +63,7 @@ FORCE_SOUND_TOOL = os.getenv("SPEECH_TEST_FORCE_TOOL", "1").lower() not in {
 }
 
 
-REALTIME_INSTRUCTIONS = (
+SOUND_TEST_INSTRUCTIONS = (
     "You are a small bilingual Vietnamese-English robot speech-command detector. "
     "The user may speak Vietnamese or English. "
     "Do not answer general questions and do not speak. "
@@ -56,6 +77,60 @@ REALTIME_INSTRUCTIONS = (
     "Understand natural Vietnamese wording and ignore unrelated speech."
 )
 
+ROBOT_INSTRUCTIONS = (
+    "You are a bilingual Vietnamese-English robot movement command detector. "
+    "The user may speak Vietnamese or English. Do not answer general questions "
+    "and do not speak. When the user clearly requests a robot movement, call "
+    "move_robot exactly once with the matching command. Do not require or check "
+    "a familiar face; speech commands are always allowed. Ignore unrelated speech. "
+    "Map forward/walk/go ahead and Vietnamese 'đi tới', 'tiến lên', or 'đi thẳng' "
+    "to forward. Map backward/reverse and 'đi lùi' to backward. Map turn left and "
+    "'quay trái' to turn_left; turn right and 'quay phải' to turn_right. Map "
+    "sidestep left/right and 'đi ngang trái/phải' to crab_left/crab_right. "
+    "Map stop/stand and 'dừng lại', 'đứng lại', or 'đứng lên' to stop or stand. "
+    "Map hold and 'giữ nguyên' to hold. Map sit/'ngồi xuống' to sit, "
+    "prone/lie down/'nằm xuống' to prone, chase/follow the ball/'đuổi bóng' "
+    "to chase, wave/'vẫy chào' to wave, bounce/'nhún' to bounce, jump/'nhảy' "
+    "to jump, and center/'đưa servo về giữa' to center. Use only the command "
+    "names declared by the tool."
+)
+
+
+def movement_tool() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": "move_robot",
+        "description": "Execute one approved robot movement command.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "enum": sorted(MOVEMENT_COMMANDS),
+                }
+            },
+            "required": ["command"],
+        },
+    }
+
+
+def sound_tool() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": "play_sound",
+        "description": "Play one predefined sound on the robot.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sound": {
+                    "type": "string",
+                    "enum": sorted(ALLOWED_SOUNDS),
+                }
+            },
+            "required": ["sound"],
+        },
+    }
+
 
 def send_json(ws: websocket.WebSocketApp, event: dict[str, Any]) -> None:
     """Send one Realtime client event as JSON."""
@@ -66,8 +141,21 @@ def send_json(ws: websocket.WebSocketApp, event: dict[str, Any]) -> None:
 class RealtimeSpeechClient:
     """Small websocket-client wrapper for the Realtime speech session."""
 
-    def __init__(self, api_key: str, bridge: Bridge) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        bridge: Bridge,
+        *,
+        on_move: Callable[[str], dict[str, Any] | None] | None = None,
+        enable_sound_tool: bool = False,
+        instructions: str = ROBOT_INSTRUCTIONS,
+        force_tool: str | None = None,
+    ) -> None:
         self.bridge = bridge
+        self.on_move = on_move
+        self.enable_sound_tool = enable_sound_tool
+        self.instructions = instructions
+        self.force_tool = force_tool
         self._ws: websocket.WebSocketApp | None = None
         self._send_lock = threading.Lock()
         self._handled_call_ids: set[str] = set()
@@ -106,7 +194,7 @@ class RealtimeSpeechClient:
                     "type": "realtime",
                     "model": MODEL,
                     "output_modalities": ["text"],
-                    "instructions": REALTIME_INSTRUCTIONS,
+                    "instructions": self.instructions,
                     "audio": {
                         "input": {
                             "format": {
@@ -120,29 +208,15 @@ class RealtimeSpeechClient:
                         }
                     },
                     "tools": [
-                        {
-                            "type": "function",
-                            "name": "play_sound",
-                            "description": "Play one predefined sound on the robot.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "sound": {
-                                        "type": "string",
-                                        "enum": sorted(ALLOWED_SOUNDS),
-                                    }
-                                },
-                                "required": ["sound"],
-                            },
-                        }
+                        sound_tool() if self.enable_sound_tool else movement_tool()
                     ],
-                    "tool_choice": "required" if FORCE_SOUND_TOOL else "auto",
+                    "tool_choice": self.force_tool or "auto",
                 },
             },
         )
         print(
             "Realtime tool mode: "
-            + ("required" if FORCE_SOUND_TOOL else "auto")
+            + (self.force_tool or "auto")
         )
 
     def _on_message(self, _ws: websocket.WebSocketApp, message: str) -> None:
@@ -171,7 +245,7 @@ class RealtimeSpeechClient:
                 {
                     "type": "function_call",
                     "call_id": event.get("call_id"),
-                    "name": event.get("name", "play_sound"),
+                    "name": event.get("name", "unknown"),
                     "arguments": event.get("arguments", "{}"),
                 }
             )
@@ -212,23 +286,60 @@ class RealtimeSpeechClient:
             f"arguments={item.get('arguments', '{}')}"
         )
 
+        raw_arguments = item.get("arguments", "{}")
         try:
-            arguments = json.loads(item.get("arguments", "{}"))
-        except json.JSONDecodeError:
+            arguments = (
+                json.loads(raw_arguments)
+                if isinstance(raw_arguments, str)
+                else raw_arguments
+            )
+        except (TypeError, json.JSONDecodeError):
             arguments = {}
 
-        sound = str(arguments.get("sound", "")).lower()
-        if sound in ALLOWED_SOUNDS:
-            try:
-                self.bridge.call("play_test_sound", sound)
-                result = {"status": "played", "sound": sound}
-                print(f"UNO Q sent command to ESP32: PLAY:{sound}")
-            except Exception as error:  # Bridge errors must not kill the WS loop.
-                result = {"status": "error", "message": str(error)}
-                print(f"Could not send sound command to ESP32: {error}")
+        name = item.get("name", "unknown")
+        if name == "move_robot":
+            command = str(arguments.get("command", "")).lower()
+            if command not in MOVEMENT_COMMANDS:
+                result = {"status": "rejected", "message": "Unsupported movement"}
+                print(f"Rejected unsupported movement: {command!r}")
+            else:
+                try:
+                    callback_result = (
+                        self.on_move(command) if self.on_move else None
+                    )
+                    if callback_result is None:
+                        command_payload = MOVEMENT_COMMANDS[command]
+                        if command_payload == "chase":
+                            raise RuntimeError(
+                                "chase requires the main robot application callback"
+                            )
+                        self.bridge.call("send_motor_command", command_payload)
+                        callback_result = {
+                            "status": "accepted",
+                            "command": command,
+                            "uart": command_payload,
+                        }
+                    result = callback_result
+                    print(f"SPEECH_COMMAND_ACCEPTED: {command}")
+                except Exception as error:  # Keep errors inside the WS loop.
+                    result = {"status": "error", "message": str(error)}
+                    print(f"Could not send movement command to robot: {error}")
+        elif name == "play_sound" and self.enable_sound_tool:
+            sound = str(arguments.get("sound", "")).lower()
+            if sound in ALLOWED_SOUNDS:
+                try:
+                    self.bridge.call("play_test_sound", sound)
+                    result = {"status": "played", "sound": sound}
+                    print(f"UNO Q sent command to ESP32: PLAY:{sound}")
+                except Exception as error:  # Bridge errors must not kill the WS loop.
+                    result = {"status": "error", "message": str(error)}
+                    print(f"Could not send sound command to ESP32: {error}")
+            else:
+                result = {"status": "rejected", "message": "Unsupported sound"}
+                print(f"Rejected unsupported sound: {sound!r}")
         else:
-            result = {"status": "rejected", "message": "Unsupported sound"}
-            print(f"Rejected unsupported sound: {sound!r}")
+            result = {"status": "rejected", "message": "Unknown tool"}
+            print(f"Rejected unknown tool: {name!r}")
 
         if self._ws is None:
             return
@@ -396,6 +507,63 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class SpeechService:
+    """Own the Realtime client and UNO Q audio listener threads."""
+
+    def __init__(
+        self,
+        realtime: RealtimeSpeechClient,
+        stop_event: threading.Event,
+        audio_thread: threading.Thread,
+    ) -> None:
+        self.realtime = realtime
+        self.stop_event = stop_event
+        self.audio_thread = audio_thread
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.realtime.close()
+        self.audio_thread.join(timeout=1.0)
+
+
+def start_speech_service(
+    bridge: Bridge,
+    *,
+    on_move: Callable[[str], dict[str, Any] | None] | None = None,
+    listen_host: str | None = None,
+    audio_port: int | None = None,
+) -> SpeechService | None:
+    """Start speech recognition in the background for the normal robot app."""
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("Speech service disabled: OPENAI_API_KEY is not set.")
+        return None
+
+    realtime = RealtimeSpeechClient(
+        api_key,
+        bridge,
+        on_move=on_move,
+        instructions=ROBOT_INSTRUCTIONS,
+    )
+    stop_event = threading.Event()
+    audio_thread = threading.Thread(
+        target=serve_esp32_audio,
+        args=(
+            realtime,
+            listen_host or os.getenv("UNO_Q_AUDIO_LISTEN_HOST", "0.0.0.0"),
+            audio_port
+            or int(os.getenv("UNO_Q_AUDIO_PORT", str(DEFAULT_AUDIO_PORT))),
+            stop_event,
+        ),
+        name="esp32-audio-server",
+        daemon=True,
+    )
+    realtime.start()
+    audio_thread.start()
+    return SpeechService(realtime, stop_event, audio_thread)
+
+
 def main() -> None:
     args = parse_args()
     api_key = os.getenv("OPENAI_API_KEY")
@@ -403,7 +571,13 @@ def main() -> None:
         raise SystemExit("Set OPENAI_API_KEY in the UNO Q runtime environment first.")
 
     bridge = Bridge()
-    realtime = RealtimeSpeechClient(api_key, bridge)
+    realtime = RealtimeSpeechClient(
+        api_key,
+        bridge,
+        enable_sound_tool=True,
+        instructions=SOUND_TEST_INSTRUCTIONS,
+        force_tool="required" if FORCE_SOUND_TOOL else "auto",
+    )
     stop_event = threading.Event()
     realtime.start()
     audio_thread = threading.Thread(

@@ -62,7 +62,7 @@ void drawMatrixFrame(const byte frame[8][13]) {
   matrix.loadFrame(packedFrame);
 }
 
-void handle_gesture(String command) {
+void handle_oled_text(String command) {
   oled.clear();
   oled.println(command);
 }
@@ -157,7 +157,7 @@ void setup() {
   drawMatrixFrame(FACE_NEUTRAL);
 
   Bridge.begin();
-  Bridge.provide_safe("update_oled", handle_gesture);
+  Bridge.provide_safe("update_oled", handle_oled_text);
   Bridge.provide_safe("send_motor_command", send_motor_command);
   Bridge.provide_safe("play_test_sound", play_test_sound);
   Bridge.provide_safe("update_face_matrix", handle_face_expression);
