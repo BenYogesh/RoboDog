@@ -56,6 +56,8 @@ I2SClass micI2S(I2S_NUM_0);
 I2SClass speakerI2S(I2S_NUM_1);
 WiFiClient audioClient;
 String uartLine;
+bool uartFrameOverflow = false;
+HardwareSerial UnoQLink(2);
 
 int16_t micPcm[AUDIO_FRAME_SAMPLES];
 int32_t micRaw[AUDIO_FRAME_SAMPLES];
@@ -74,10 +76,10 @@ constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 10000;
 
 void writeBigEndian32(uint32_t value) {
   uint8_t header[4] = {
-      static_cast<uint8_t>((value >> 24) & 0xff),
-      static_cast<uint8_t>((value >> 16) & 0xff),
-      static_cast<uint8_t>((value >> 8) & 0xff),
-      static_cast<uint8_t>(value & 0xff),
+    static_cast<uint8_t>((value >> 24) & 0xff),
+    static_cast<uint8_t>((value >> 16) & 0xff),
+    static_cast<uint8_t>((value >> 8) & 0xff),
+    static_cast<uint8_t>(value & 0xff),
   };
   audioClient.write(header, sizeof(header));
 }
@@ -87,15 +89,11 @@ bool readFileBytes(File &file, uint8_t *buffer, size_t length) {
 }
 
 uint16_t readLittleEndian16(const uint8_t *bytes) {
-  return static_cast<uint16_t>(bytes[0]) |
-         (static_cast<uint16_t>(bytes[1]) << 8);
+  return static_cast<uint16_t>(bytes[0]) | (static_cast<uint16_t>(bytes[1]) << 8);
 }
 
 uint32_t readLittleEndian32(const uint8_t *bytes) {
-  return static_cast<uint32_t>(bytes[0]) |
-         (static_cast<uint32_t>(bytes[1]) << 8) |
-         (static_cast<uint32_t>(bytes[2]) << 16) |
-         (static_cast<uint32_t>(bytes[3]) << 24);
+  return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) | (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
 }
 
 void rejectSound(const String &sound, const char *reason) {
@@ -104,6 +102,8 @@ void rejectSound(const String &sound, const char *reason) {
   }
   soundDataRemaining = 0;
   currentSound = "";
+  Serial.printf("PLAYBACK_STATUS ERROR sound=%s reason=%s\n",
+                sound.c_str(), reason);
   Serial.printf("NACK:WAV:%s:%s\n", sound.c_str(), reason);
 }
 
@@ -118,6 +118,8 @@ bool openWavSoundLocked(const String &sound) {
   }
 
   const String path = String("/sounds/") + sound + ".wav";
+  Serial.printf("PLAYBACK_STATUS OPENING sound=%s file=%s\n",
+                sound.c_str(), path.c_str());
   soundFile = LittleFS.open(path, "r");
   if (!soundFile) {
     rejectSound(sound, "FILE_NOT_FOUND");
@@ -125,9 +127,7 @@ bool openWavSoundLocked(const String &sound) {
   }
 
   uint8_t riffHeader[12];
-  if (!readFileBytes(soundFile, riffHeader, sizeof(riffHeader)) ||
-      memcmp(riffHeader, "RIFF", 4) != 0 ||
-      memcmp(riffHeader + 8, "WAVE", 4) != 0) {
+  if (!readFileBytes(soundFile, riffHeader, sizeof(riffHeader)) || memcmp(riffHeader, "RIFF", 4) != 0 || memcmp(riffHeader + 8, "WAVE", 4) != 0) {
     rejectSound(sound, "NOT_WAV");
     return false;
   }
@@ -187,14 +187,16 @@ bool openWavSoundLocked(const String &sound) {
     rejectSound(sound, "MISSING_FMT_OR_DATA");
     return false;
   }
-  if (audioFormat != 1 || channels != 1 || bitsPerSample != 16 ||
-      sampleRate != SPEAKER_SAMPLE_RATE || (dataBytes & 1U) != 0) {
+  if (audioFormat != 1 || channels != 1 || bitsPerSample != 16 || sampleRate != SPEAKER_SAMPLE_RATE || (dataBytes & 1U) != 0) {
     rejectSound(sound, "EXPECTED_PCM16_MONO_16KHZ");
     return false;
   }
 
   currentSound = sound;
   soundDataRemaining = dataBytes;
+  Serial.printf("PLAYBACK_STATUS STARTED sound=%s bytes=%lu\n",
+                currentSound.c_str(),
+                static_cast<unsigned long>(soundDataRemaining));
   Serial.printf("ACK:WAV_STARTED:%s bytes=%lu\n", currentSound.c_str(),
                 static_cast<unsigned long>(soundDataRemaining));
   return true;
@@ -211,20 +213,51 @@ bool openWavSound(const String &sound) {
   return opened;
 }
 
+const char *soundForCommand(char command) {
+  switch (command) {
+    case 'B':
+      return "beep";
+    case 'S':
+      return "success";
+    case 'E':
+      return "error";
+    default:
+      return nullptr;
+  }
+}
+
 void readPlayCommands() {
-  while (Serial2.available()) {
-    const char character = static_cast<char>(Serial2.read());
+  while (UnoQLink.available()) {
+    const char character = static_cast<char>(UnoQLink.read());
+
     if (character == '\n') {
       uartLine.trim();
-      if (uartLine.startsWith("PLAY:")) {
-        String sound = uartLine.substring(5);
-        sound.toLowerCase();
-        Serial.printf("ACK:CMD_RECEIVED:PLAY:%s\n", sound.c_str());
-        openWavSound(sound);
+      if (!uartFrameOverflow && uartLine.startsWith("SND:") &&
+          uartLine.length() == 5) {
+        const char command = uartLine.charAt(4);
+        const char *sound = soundForCommand(command);
+        if (sound != nullptr) {
+          Serial.printf("UART_COMMAND_RECEIVED frame=%s sound=%s\n",
+                        uartLine.c_str(), sound);
+          Serial.printf("COMMAND_RECEIVED %c -> PLAY:%s\n", command,
+                        sound);
+          Serial.printf("ACK:CMD_RECEIVED:%c:%s\n", command, sound);
+          const bool started = openWavSound(String(sound));
+          Serial.printf("COMMAND_RESULT %c sound=%s status=%s\n", command,
+                        sound, started ? "PLAYBACK_STARTED"
+                                       : "PLAYBACK_REJECTED");
+        }
       }
+      // Invalid/noisy frames are intentionally silent on the USB monitor.
       uartLine = "";
-    } else if (character != '\r' && uartLine.length() < 32) {
-      uartLine += character;
+      uartFrameOverflow = false;
+    } else if (character != '\r') {
+      if (!uartFrameOverflow && uartLine.length() < 16) {
+        uartLine += character;
+      } else {
+        // Drop an overlong/noisy frame until its terminator arrives.
+        uartFrameOverflow = true;
+      }
     }
   }
 }
@@ -242,7 +275,7 @@ void pumpWav() {
   }
 
   size_t bytesToRead = min(
-      static_cast<size_t>(soundDataRemaining), sizeof(wavInput));
+    static_cast<size_t>(soundDataRemaining), sizeof(wavInput));
   bytesToRead -= bytesToRead % sizeof(int16_t);
   if (bytesToRead == 0) {
     rejectSound(currentSound, "ODD_SAMPLE_DATA");
@@ -265,12 +298,11 @@ void pumpWav() {
   for (size_t index = 0; index < sampleCount; ++index) {
     const size_t byteIndex = index * sizeof(int16_t);
     speakerPcm[index] = static_cast<int16_t>(
-        static_cast<uint16_t>(wavInput[byteIndex]) |
-        (static_cast<uint16_t>(wavInput[byteIndex + 1]) << 8));
+      static_cast<uint16_t>(wavInput[byteIndex]) | (static_cast<uint16_t>(wavInput[byteIndex + 1]) << 8));
   }
 
   const size_t bytesWritten = speakerI2S.write(
-      speakerPcm, sampleCount * sizeof(speakerPcm[0]));
+    speakerPcm, sampleCount * sizeof(speakerPcm[0]));
   if (bytesWritten != bytesRead) {
     rejectSound(currentSound, "I2S_WRITE_ERROR");
     if (soundMutex != nullptr) {
@@ -281,6 +313,7 @@ void pumpWav() {
 
   soundDataRemaining -= bytesRead;
   if (soundDataRemaining == 0) {
+    Serial.printf("PLAYBACK_STATUS DONE sound=%s\n", currentSound.c_str());
     Serial.printf("SOUND_DONE:%s\n", currentSound.c_str());
     soundFile.close();
     currentSound = "";
@@ -315,8 +348,7 @@ int16_t convertMicSample(int32_t rawSample) {
 }
 
 void connectAudioStreamIfNeeded() {
-  if (WiFi.status() != WL_CONNECTED || audioClient.connected() ||
-      millis() - lastAudioConnectAttempt < 1000) {
+  if (WiFi.status() != WL_CONNECTED || audioClient.connected() || millis() - lastAudioConnectAttempt < 1000) {
     return;
   }
 
@@ -328,11 +360,11 @@ void connectAudioStreamIfNeeded() {
     Serial.println("Audio stream connected.");
   } else {
     Serial.printf(
-        "Audio stream connection failed. Target=%s:%d localIP=%s "
-        "gateway=%s WiFiStatus=%d\n",
-        TEST_UNO_Q_HOST, TEST_UNO_Q_AUDIO_PORT,
-        WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(),
-        static_cast<int>(WiFi.status()));
+      "Audio stream connection failed. Target=%s:%d localIP=%s "
+      "gateway=%s WiFiStatus=%d\n",
+      TEST_UNO_Q_HOST, TEST_UNO_Q_AUDIO_PORT,
+      WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(),
+      static_cast<int>(WiFi.status()));
   }
 }
 
@@ -342,7 +374,7 @@ void streamMicFrame() {
   }
 
   const size_t bytesRead = micI2S.readBytes(
-      reinterpret_cast<char *>(micRaw), sizeof(micRaw));
+    reinterpret_cast<char *>(micRaw), sizeof(micRaw));
   if (bytesRead != sizeof(micRaw)) {
     return;
   }
@@ -403,8 +435,7 @@ void scanForWiFiTarget() {
 }
 
 bool connectWiFi() {
-  if (String(TEST_WIFI_SSID) == "CHANGE_ME" ||
-      String(TEST_WIFI_PASSWORD) == "CHANGE_ME") {
+  if (String(TEST_WIFI_SSID) == "CHANGE_ME" || String(TEST_WIFI_PASSWORD) == "CHANGE_ME") {
     Serial.println("Wi-Fi credentials are still CHANGE_ME.");
     return false;
   }
@@ -416,8 +447,7 @@ bool connectWiFi() {
   WiFi.begin(TEST_WIFI_SSID, TEST_WIFI_PASSWORD);
 
   const uint32_t startTime = millis();
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - startTime < WIFI_CONNECT_TIMEOUT_MS) {
+  while (WiFi.status() != WL_CONNECTED && millis() - startTime < WIFI_CONNECT_TIMEOUT_MS) {
     delay(500);
     Serial.print('.');
   }
@@ -450,7 +480,7 @@ void maintainWiFi() {
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1, ESP32_UART_RX_PIN, ESP32_UART_TX_PIN);
+  UnoQLink.begin(115200, SERIAL_8N1, ESP32_UART_RX_PIN, ESP32_UART_TX_PIN);
   if (!LittleFS.begin(false)) {
     Serial.println("LittleFS mount failed; upload the filesystem before testing.");
   } else {
@@ -467,11 +497,11 @@ void setup() {
   speakerI2S.setPins(SPEAKER_BCLK_PIN, SPEAKER_WS_PIN, SPEAKER_DOUT_PIN, -1);
 
   const bool micStarted = micI2S.begin(
-      I2S_MODE_STD, MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_32BIT,
-      I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
+    I2S_MODE_STD, MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_32BIT,
+    I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
   const bool speakerStarted = speakerI2S.begin(
-      I2S_MODE_STD, SPEAKER_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT,
-      I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
+    I2S_MODE_STD, SPEAKER_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT,
+    I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
   if (!micStarted || !speakerStarted) {
     Serial.println("I2S initialization failed.");
     while (true) {
@@ -480,9 +510,7 @@ void setup() {
   }
 
   soundMutex = xSemaphoreCreateMutex();
-  if (soundMutex == nullptr ||
-      xTaskCreate(soundPlaybackTask, "wav_playback", 4096, nullptr, 1,
-                  nullptr) != pdPASS) {
+  if (soundMutex == nullptr || xTaskCreate(soundPlaybackTask, "wav_playback", 4096, nullptr, 1, nullptr) != pdPASS) {
     Serial.println("WAV playback task initialization failed.");
     while (true) {
       delay(1000);

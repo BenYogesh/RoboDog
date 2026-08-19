@@ -152,12 +152,16 @@ class RealtimeSpeechClient:
         if event_type == "session.updated":
             self.ready.set()
             print("Realtime session ready; waiting for speech.")
+        elif event_type == "input_audio_buffer.speech_started":
+            print("SPEECH_RECEIVED: speech started; listening")
+        elif event_type == "input_audio_buffer.speech_stopped":
+            print("SPEECH_RECEIVED: speech ended; processing")
         elif event_type == "response.output_text.delta":
             print(event.get("delta", ""), end="", flush=True)
         elif event_type == "response.output_text.done":
             print()
         elif event_type == "conversation.item.input_audio_transcription.completed":
-            print(f"Realtime transcript: {event.get('transcript', '')}")
+            print(f"SPEECH_RECEIVED: transcript={event.get('transcript', '')}")
         elif event_type in {"response.output_item.done", "conversation.item.done"}:
             item = event.get("item", {})
             if item.get("type") == "function_call":
@@ -287,17 +291,16 @@ class AudioMonitor:
         self.frames = 0
         self.bytes_received = 0
         self.next_report = 0.0
+        self.signal_active = False
 
     def report(self, pcm16: bytes) -> None:
         self.frames += 1
         self.bytes_received += len(pcm16)
-        now = time.monotonic()
-        if self.frames != 1 and now < self.next_report:
-            return
-        self.next_report = now + 1.0
 
         samples = array("h")
         samples.frombytes(pcm16[: len(pcm16) - (len(pcm16) % 2)])
+        peak = 0
+        rms = 0.0
         if sys.byteorder != "little":
             samples.byteswap()
         if samples:
@@ -305,9 +308,24 @@ class AudioMonitor:
             rms = math.sqrt(
                 sum(int(sample) * int(sample) for sample in samples) / len(samples)
             )
+            signal_active = peak > 300
+            if signal_active != self.signal_active:
+                self.signal_active = signal_active
+                print(
+                    "SPEECH_AUDIO_RECEIVED: microphone signal detected"
+                    if signal_active
+                    else "SPEECH_AUDIO_ENDED: microphone quiet"
+                )
+
+        now = time.monotonic()
+        if self.frames != 1 and now < self.next_report:
+            return
+        self.next_report = now + 1.0
+
+        if samples:
             rms_dbfs = 20.0 * math.log10(max(rms, 1.0) / 32768.0)
             peak_dbfs = 20.0 * math.log10(max(peak, 1.0) / 32768.0)
-            signal_state = "signal" if peak > 300 else "quiet"
+            signal_state = "signal" if self.signal_active else "quiet"
             levels = f"rms={rms_dbfs:.1f} dBFS peak={peak_dbfs:.1f} dBFS {signal_state}"
         else:
             levels = "empty frame"

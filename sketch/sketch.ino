@@ -106,20 +106,39 @@ bool is_supported_test_sound(const String &sound) {
   return sound == "beep" || sound == "success" || sound == "error";
 }
 
+char test_sound_command(const String &sound) {
+  if (sound == "beep") {
+    return 'B';
+  }
+  if (sound == "success") {
+    return 'S';
+  }
+  if (sound == "error") {
+    return 'E';
+  }
+  return '\0';
+}
+
 void play_test_sound(String sound) {
   sound.trim();
   sound.toLowerCase();
-  if (!is_supported_test_sound(sound)) {
+  const char command = test_sound_command(sound);
+  if (!is_supported_test_sound(sound) || command == '\0') {
     Serial.print("UNO Q rejected sound: ");
     Serial.println(sound);
     return;
   }
 
-  // The ESP32 test firmware handles the sound locally through the MAX98357A.
-  Serial.print("UNO Q UART TX: PLAY:");
-  Serial.println(sound);
-  Serial1.print("PLAY:");
-  Serial1.print(sound);
+  // Keep the payload to one uppercase byte, but frame it so UART noise cannot
+  // accidentally trigger a sound. Lowercase bytes remain motion commands.
+  Serial.print("UNO Q UART TX: ");
+  Serial.print("SND:");
+  Serial.print(command);
+  Serial.print(" (PLAY:");
+  Serial.print(sound);
+  Serial.println(")");
+  Serial1.print("SND:");
+  Serial1.write(static_cast<uint8_t>(command));
   Serial1.write('\n');
   Serial1.flush();
 }

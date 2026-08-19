@@ -7,7 +7,7 @@ flowchart LR
   M[INMP441] -->|24 kHz PCM16 over TCP| Q[UNO Q Linux]
   Q -->|Realtime WebSocket| O[gpt-realtime-2.1-mini]
   O -->|play_sound function call| Q
-  Q -->|PLAY:beep\n over Serial1| E[ESP32]
+  Q -->|SND:B/S/E\n over Serial1| E[ESP32]
   E --> A[MAX98357A]
 ```
 
@@ -104,13 +104,19 @@ Do not install packages into the system Python or a separate virtual
 environment for this mode. App Lab installs `python/requirements.txt` into
 the runtime that provides `arduino.app_utils.Bridge`.
 
-The UNO Q terminal should show `UNO Q audio RX` with PCM frame counts and
-microphone levels, followed by a Realtime transcript, `Realtime tool call`,
+The sound UART uses a short framed command containing one uppercase byte:
+`SND:B` = beep, `SND:S` = success, and `SND:E` = error. The ESP32 silently
+discards invalid/noisy frames. The UNO Q terminal should show
+`UNO Q audio RX` with PCM frame counts and
+microphone levels, followed by `SPEECH_RECEIVED`, a Realtime transcript,
+`Realtime tool call`,
 and `UNO Q sent command to ESP32`. The UNO Q MCU serial output should show
-`UNO Q UART TX: PLAY:<sound>`. The ESP32 USB serial monitor should show
-`ACK:CMD_RECEIVED`, `ACK:WAV_STARTED`, and
-`SOUND_DONE`. These messages identify whether the fault is before or after
-the command reaches the ESP32.
+`UNO Q UART TX: SND:B (PLAY:beep)` (or `SND:S`/`SND:E`). The ESP32 USB serial monitor
+should show `UART_COMMAND_RECEIVED`, `COMMAND_RECEIVED`,
+`PLAYBACK_STATUS STARTED`, and
+`PLAYBACK_STATUS DONE`, together with the existing `ACK:CMD_RECEIVED`,
+`ACK:WAV_STARTED`, and `SOUND_DONE` messages. These messages identify whether
+the fault is before or after the command reaches the ESP32.
 
 ## Install WAV files
 
@@ -127,6 +133,38 @@ data/
 Use PCM, 16-bit, mono, 16 kHz WAV files. In Arduino IDE, upload this folder
 with the ESP32 LittleFS data uploader. The firmware opens the files from
 `/sounds/<name>.wav`.
+
+## Output-only LittleFS test
+
+To test only the MAX98357A output, open and flash:
+
+```text
+esp32_speech_test/littlefs_output_test/littlefs_output_test.ino
+```
+
+This sketch does not use Wi-Fi, the microphone, UART, or OpenAI. It mounts the
+existing LittleFS image and plays `beep.wav`, `success.wav`, and `error.wav`
+once in that order, after a generated 1 kHz tone. Open the ESP32 serial
+monitor at 115200 baud and expect:
+
+```text
+TONE_START 1000Hz 2000ms
+TONE_DONE
+WAV_START /sounds/beep.wav ...
+WAV_DONE /sounds/beep.wav
+WAV_START /sounds/success.wav ...
+WAV_DONE /sounds/success.wav
+WAV_START /sounds/error.wav ...
+WAV_DONE /sounds/error.wav
+```
+
+Uploading the new sketch normally does not erase LittleFS, so re-upload the
+filesystem only if the test reports `FILE_NOT_FOUND`. Do not use a LittleFS
+format option for this test.
+
+If `TONE_DONE` appears but no tone is audible, check MAX98357A power, `SD_MODE`,
+I2S wiring, and the speaker connection. If the tone is audible but WAV playback
+is silent, the issue is in the WAV data rather than the amplifier path.
 
 If the ESP32 connects to Wi-Fi but cannot connect to TCP port 3333, verify the
 UNO Q IP address in `secrets.h`, that both devices are on the same LAN, that
