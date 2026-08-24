@@ -7,6 +7,7 @@
 #define I2C_ADDRESS 0x3C
 SSD1306AsciiWire oled;
 ArduinoLEDMatrix matrix;
+String esp32StatusLine;
 
 // 13x8 frames: [row][col], row 0 = top, 1 = LED on.
 const byte FACE_SMILEY[8][13] = {
@@ -102,6 +103,41 @@ void send_motor_command(String command) {
   Serial1.write('\n');
 }
 
+void set_control_mode(String mode) {
+  // The ESP32 gait firmware owns Bluetooth input.  This frame tells it when
+  // to ignore Uno Q autonomous/voice motion and accept Bluetooth only.
+  mode.trim();
+  mode.toLowerCase();
+  if (mode == "manual") {
+    Serial1.print("MODE:MANUAL\n");
+  } else if (mode == "automatic" || mode == "auto") {
+    Serial1.print("MODE:AUTO\n");
+  }
+  Serial1.flush();
+}
+
+void read_esp32_status() {
+  while (Serial1.available() > 0) {
+    const char character = static_cast<char>(Serial1.read());
+    if (character == '\r') continue;
+    if (character == '\n') {
+      esp32StatusLine.trim();
+      if (esp32StatusLine == "MODE:MANUAL") {
+        Bridge.notify("manual_mode_changed", "manual");
+      } else if (esp32StatusLine == "MODE:AUTO") {
+        Bridge.notify("manual_mode_changed", "automatic");
+      }
+      esp32StatusLine = "";
+      continue;
+    }
+    if (esp32StatusLine.length() < 24) {
+      esp32StatusLine += character;
+    } else {
+      esp32StatusLine = "";
+    }
+  }
+}
+
 bool is_supported_test_sound(const String &sound) {
   return sound == "beep" || sound == "success" || sound == "error";
 }
@@ -159,10 +195,11 @@ void setup() {
   Bridge.begin();
   Bridge.provide_safe("update_oled", handle_oled_text);
   Bridge.provide_safe("send_motor_command", send_motor_command);
+  Bridge.provide_safe("set_control_mode", set_control_mode);
   Bridge.provide_safe("play_test_sound", play_test_sound);
   Bridge.provide_safe("update_face_matrix", handle_face_expression);
 }
 
 void loop() {
-  // Bridge handles all background polling automatically
+  read_esp32_status();
 }

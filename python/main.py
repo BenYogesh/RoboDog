@@ -23,6 +23,7 @@ import cv2
 from arduino.app_utils import App, Bridge
 from ball_tracker import BallTracker
 from face_gate import FaceGate, verify_face_models
+from manual_media import ManualMediaServer
 from speech_test import MOVEMENT_COMMANDS, start_speech_service
 
 cv2.setNumThreads(1)    # Khởi tạo OpenCV để sử dụng một luồng duy nhất, tránh xung đột với các luồng khác
@@ -113,6 +114,8 @@ CAMERA_SCAN_LOCKED = "LOCKED"
 CAMERA_SCAN_RETURNING = "RETURNING"
 
 cam = CameraStream(camera_path)
+manual_media = ManualMediaServer(cam.read)
+manual_media.start()
 verify_face_models()
 face_gate = FaceGate()
 ball_tracker = BallTracker(
@@ -280,10 +283,70 @@ STATE_STANDING = "STANDING"
 STATE_SITTING = "SITTING"
 STATE_PRONE = "PRONE"
 STATE_CHASING = "CHASING"
+STATE_MANUAL = "MANUAL_CONTROL"
 robot_state = STATE_STANDING
 COMMAND_COOLDOWN_S = 0.7
 POSTURE_TRANSITION_COOLDOWN_S = 2.0
 command_cooldown_until = 0.0
+
+
+def send_control_mode(mode):
+    """Tell the UNO Q MCU which control source the ESP32 must accept."""
+    try:
+        bridge.call("set_control_mode", mode)
+    except Exception as error:
+        print(f"Control-mode Bridge call failed: {error}")
+
+
+def enter_manual_control(source="voice", notify_esp32=True):
+    """Stop autonomous motion and expose the LAN media streams."""
+    global robot_state, command_cooldown_until
+    global camera_scan_state, camera_scan_direction, camera_net_offset_s
+    global python_cam_state
+    send_motor_command(CMD_STOP)
+    # Manual control owns the camera position, so cancel any autonomous scan
+    # immediately instead of waiting for the vision loop to finish returning.
+    send_motor_command(CAM_CMD_NEUTRAL)
+    camera_scan_state = CAMERA_SCAN_IDLE
+    camera_scan_direction = 0
+    camera_net_offset_s = 0.0
+    python_cam_state = "N"
+    if notify_esp32:
+        send_control_mode("manual")
+    robot_state = STATE_MANUAL
+    command_cooldown_until = 0.0
+    manual_media.set_active(True)
+    _update_oled("MANUAL CONTROL")
+    print(f"MANUAL_CONTROL_ENTERED source={source}")
+
+
+def leave_manual_control(source="voice", notify_esp32=True):
+    """Return to the existing vision/voice-controlled state."""
+    global robot_state, command_cooldown_until
+    global camera_scan_state, camera_scan_direction, camera_net_offset_s
+    global python_cam_state
+    manual_media.set_active(False)
+    if notify_esp32:
+        send_control_mode("automatic")
+    send_motor_command(CMD_STOP)
+    send_motor_command(CAM_CMD_NEUTRAL)
+    camera_scan_state = CAMERA_SCAN_IDLE
+    camera_scan_direction = 0
+    camera_net_offset_s = 0.0
+    python_cam_state = "N"
+    robot_state = STATE_STANDING
+    command_cooldown_until = time.time() + POSTURE_TRANSITION_COOLDOWN_S
+    _update_oled("AUTOMATIC CONTROL")
+    print(f"MANUAL_CONTROL_EXITED source={source}")
+
+
+def handle_esp32_control_mode(mode):
+    """Reflect a Bluetooth-originated mode change from the ESP32."""
+    mode = str(mode).lower().strip()
+    if mode == "manual" and robot_state != STATE_MANUAL:
+        enter_manual_control("bluetooth", notify_esp32=False)
+    elif mode in {"automatic", "auto"} and robot_state == STATE_MANUAL:
+        leave_manual_control("bluetooth", notify_esp32=False)
 
 
 def handle_speech_command(command):
@@ -291,6 +354,18 @@ def handle_speech_command(command):
     global robot_state, command_cooldown_until
 
     command = str(command).lower().strip()
+    if command == "manual":
+        enter_manual_control("voice")
+        return {"status": "accepted", "command": command, "mode": "manual"}
+    if command == "automatic":
+        leave_manual_control("voice")
+        return {"status": "accepted", "command": command, "mode": "automatic"}
+    if robot_state == STATE_MANUAL:
+        print(f"SPEECH_COMMAND_REJECTED_MANUAL_MODE: {command!r}")
+        return {
+            "status": "rejected",
+            "message": "Manual mode accepts Bluetooth movement commands only",
+        }
     uart_command = MOVEMENT_COMMANDS.get(command)
     if uart_command is None:
         print(f"SPEECH_COMMAND_REJECTED: {command!r}")
@@ -348,6 +423,11 @@ def main_loop():
         if frame is None:
             return
         frame = cv2.flip(frame, 1)
+
+        # Manual mode deliberately leaves the camera and microphone paths as
+        # relays.  No gesture, face, ball, or voice-generated movement is run.
+        if robot_state == STATE_MANUAL:
+            return
 
         now = time.monotonic()
         face_status = "none"
@@ -437,7 +517,18 @@ def _update_oled(display_text):
     last_text = display_text
 
 
-speech_service = start_speech_service(bridge, on_move=handle_speech_command)
+try:
+    # The MCU uses Bridge.notify when Bluetooth enters/exits manual mode.
+    Bridge.provide("manual_mode_changed", handle_esp32_control_mode)
+except Exception as error:
+    print(f"Could not register ESP32 mode callback: {error}")
+
+
+speech_service = start_speech_service(
+    bridge,
+    on_move=handle_speech_command,
+    on_audio_frame=manual_media.publish_audio_frame,
+)
 
 try:
     App.run(user_loop=main_loop)
@@ -447,3 +538,4 @@ except NameError:
 finally:
     if speech_service is not None:
         speech_service.stop()
+    manual_media.stop()

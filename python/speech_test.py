@@ -18,7 +18,6 @@ import json
 import math
 import os
 import socket
-import struct
 import sys
 import threading
 import time
@@ -26,12 +25,19 @@ from typing import Any, Callable
 
 import websocket
 from arduino.app_utils import Bridge
+from media_protocol import (
+    AUDIO_HEADER as MIC_STREAM_HEADER,
+    AUDIO_MAGIC as MIC_STREAM_MAGIC,
+    FRAME_LENGTH,
+    read_exact,
+)
 
 
 MODEL = "gpt-realtime-2.1-mini"
 INPUT_SAMPLE_RATE = 24000
 DEFAULT_AUDIO_PORT = 3333
 MAX_AUDIO_FRAME_BYTES = 64 * 1024
+MIC_CHANNELS = 1
 ALLOWED_SOUNDS = {"beep", "success", "error"}
 MOVEMENT_COMMANDS = {
     "forward": "w",
@@ -50,6 +56,8 @@ MOVEMENT_COMMANDS = {
     "bounce": "u",
     "jump": "j",
     "center": "k",
+    "manual": "manual",
+    "automatic": "automatic",
     # ``chase`` is handled by main.py because it starts the camera/ball state.
     "chase": "chase",
 }
@@ -91,8 +99,10 @@ ROBOT_INSTRUCTIONS = (
     "Map hold and 'giữ nguyên' to hold. Map sit/'ngồi xuống' to sit, "
     "prone/lie down/'nằm xuống' to prone, chase/follow the ball/'đuổi bóng' "
     "to chase, wave/'vẫy chào' to wave, bounce/'nhún' to bounce, jump/'nhảy' "
-    "to jump, and center/'đưa servo về giữa' to center. Use only the command "
-    "names declared by the tool."
+    "to jump, and center/'đưa servo về giữa' to center. Map manual control, "
+    "manual mode, or 'điều khiển tay' to manual. Map automatic mode or "
+    "'điều khiển tự động' to automatic. Use only the command names declared "
+    "by the tool."
 )
 
 
@@ -385,16 +395,6 @@ class RealtimeSpeechClient:
             self._ws.close()
 
 
-def read_exact(connection: socket.socket, size: int) -> bytes:
-    data = bytearray()
-    while len(data) < size:
-        chunk = connection.recv(size - len(data))
-        if not chunk:
-            raise ConnectionError("ESP32 audio connection closed")
-        data.extend(chunk)
-    return bytes(data)
-
-
 class AudioMonitor:
     """Print evidence that PCM frames and a nonzero mic signal reached UNO Q."""
 
@@ -447,12 +447,18 @@ class AudioMonitor:
 
 
 def serve_esp32_audio(
-    realtime: RealtimeSpeechClient,
+    realtime: RealtimeSpeechClient | None,
     host: str,
     port: int,
     stop_event: threading.Event,
+    on_frame: Callable[[bytes], None] | None = None,
 ) -> None:
-    """Accept one ESP32 TCP stream using a 4-byte big-endian length prefix."""
+    """Accept one ESP32 TCP stream and optionally relay its raw frames.
+
+    New ESP32 builds send an ``AUD0`` header that identifies mono PCM16.
+    The old four-byte-length-only stream is still accepted for the one-mic
+    speech test.
+    """
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -474,10 +480,29 @@ def serve_esp32_audio(
 
             print(f"ESP32 audio connected from {address[0]}:{address[1]}.")
             with connection:
+                stream_channels = MIC_CHANNELS
                 while not stop_event.is_set():
                     try:
                         header = read_exact(connection, 4)
-                        frame_size = struct.unpack("!I", header)[0]
+                        if header == MIC_STREAM_MAGIC:
+                            sample_rate, stream_channels, bits = MIC_STREAM_HEADER.unpack(
+                                read_exact(connection, MIC_STREAM_HEADER.size)
+                            )
+                            if bits != 16:
+                                raise ValueError(
+                                    f"unsupported ESP32 audio depth: {bits}"
+                                )
+                            if stream_channels != MIC_CHANNELS:
+                                raise ValueError(
+                                    f"expected {MIC_CHANNELS} microphone channel, "
+                                    f"got {stream_channels}"
+                                )
+                            print(
+                                "ESP32 audio format: "
+                                f"{stream_channels} channel(s), {sample_rate} Hz, PCM16"
+                            )
+                            header = read_exact(connection, 4)
+                        frame_size = FRAME_LENGTH.unpack(header)[0]
                         if frame_size == 0 or frame_size > MAX_AUDIO_FRAME_BYTES:
                             raise ValueError(f"Invalid audio frame size: {frame_size}")
                         frame = read_exact(connection, frame_size)
@@ -486,7 +511,10 @@ def serve_esp32_audio(
                         break
 
                     monitor.report(frame)
-                    realtime.send_audio(frame)
+                    if on_frame is not None:
+                        on_frame(frame)
+                    if realtime is not None:
+                        realtime.send_audio(frame)
 
             print("Waiting for ESP32 audio reconnect.")
 
@@ -512,7 +540,7 @@ class SpeechService:
 
     def __init__(
         self,
-        realtime: RealtimeSpeechClient,
+        realtime: RealtimeSpeechClient | None,
         stop_event: threading.Event,
         audio_thread: threading.Thread,
     ) -> None:
@@ -522,7 +550,8 @@ class SpeechService:
 
     def stop(self) -> None:
         self.stop_event.set()
-        self.realtime.close()
+        if self.realtime is not None:
+            self.realtime.close()
         self.audio_thread.join(timeout=1.0)
 
 
@@ -530,22 +559,23 @@ def start_speech_service(
     bridge: Bridge,
     *,
     on_move: Callable[[str], dict[str, Any] | None] | None = None,
+    on_audio_frame: Callable[[bytes], None] | None = None,
     listen_host: str | None = None,
     audio_port: int | None = None,
 ) -> SpeechService | None:
     """Start speech recognition in the background for the normal robot app."""
 
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("Speech service disabled: OPENAI_API_KEY is not set.")
-        return None
-
-    realtime = RealtimeSpeechClient(
-        api_key,
-        bridge,
-        on_move=on_move,
-        instructions=ROBOT_INSTRUCTIONS,
-    )
+    realtime: RealtimeSpeechClient | None = None
+    if api_key:
+        realtime = RealtimeSpeechClient(
+            api_key,
+            bridge,
+            on_move=on_move,
+            instructions=ROBOT_INSTRUCTIONS,
+        )
+    else:
+        print("Speech recognition disabled: OPENAI_API_KEY is not set.")
     stop_event = threading.Event()
     audio_thread = threading.Thread(
         target=serve_esp32_audio,
@@ -555,11 +585,13 @@ def start_speech_service(
             audio_port
             or int(os.getenv("UNO_Q_AUDIO_PORT", str(DEFAULT_AUDIO_PORT))),
             stop_event,
+            on_audio_frame,
         ),
         name="esp32-audio-server",
         daemon=True,
     )
-    realtime.start()
+    if realtime is not None:
+        realtime.start()
     audio_thread.start()
     return SpeechService(realtime, stop_event, audio_thread)
 

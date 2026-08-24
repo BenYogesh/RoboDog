@@ -1,8 +1,9 @@
-// Minimal ESP32 speech test for one INMP441 + one MAX98357A.
+// ESP32 audio test for one INMP441 microphone + one MAX98357A.
 //
-// The microphone is sent to the UNO Q as 24 kHz mono PCM16 over TCP. Sound
-// commands open 16 kHz mono PCM WAV files from LittleFS and stream them to
-// the MAX98357A.
+// The microphone is sent to the UNO Q as 24 kHz mono PCM16 over TCP.
+// Sound commands open 16 kHz mono PCM WAV files from LittleFS. In manual
+// mode, the UNO Q can also forward 16 kHz mono PCM from a laptop to the
+// MAX98357A over a second TCP stream.
 
 #include <Arduino.h>
 #include <ESP_I2S.h>
@@ -32,11 +33,15 @@
 #define TEST_UNO_Q_AUDIO_PORT 3333
 #endif
 
+#ifndef TEST_UNO_Q_SPEAKER_PORT
+#define TEST_UNO_Q_SPEAKER_PORT 3336
+#endif
+
 // Change these if they conflict with the existing ESP32 gait/servo wiring.
 constexpr int MIC_BCLK_PIN = 26;
 constexpr int MIC_WS_PIN = 25;
 constexpr int MIC_SD_PIN = 33;
-constexpr int MIC_LR_PIN = 4;  // INMP441 L/R: LOW selects the left slot.
+constexpr int MIC_LR_PIN = 4; // LOW selects the left I2S slot.
 
 constexpr int SPEAKER_BCLK_PIN = 14;
 constexpr int SPEAKER_WS_PIN = 13;
@@ -50,11 +55,14 @@ constexpr int ESP32_UART_TX_PIN = 17;
 constexpr uint32_t MIC_SAMPLE_RATE = 24000;
 constexpr uint32_t SPEAKER_SAMPLE_RATE = 16000;
 constexpr size_t AUDIO_FRAME_SAMPLES = 480;  // 20 ms at 24 kHz.
+constexpr size_t MIC_CHANNELS = 1;
 constexpr int32_t MIC_SHIFT = 14;
+constexpr size_t MAX_NETWORK_SPEAKER_FRAME_BYTES = 4096;
 
 I2SClass micI2S(I2S_NUM_0);
 I2SClass speakerI2S(I2S_NUM_1);
 WiFiClient audioClient;
+WiFiClient speakerClient;
 String uartLine;
 bool uartFrameOverflow = false;
 HardwareSerial UnoQLink(2);
@@ -68,8 +76,16 @@ File soundFile;
 String currentSound;
 uint32_t soundDataRemaining = 0;
 uint32_t lastAudioConnectAttempt = 0;
+uint32_t lastSpeakerConnectAttempt = 0;
 uint32_t lastWiFiAttempt = 0;
 SemaphoreHandle_t soundMutex = nullptr;
+
+uint8_t speakerNetworkFrame[MAX_NETWORK_SPEAKER_FRAME_BYTES];
+size_t speakerNetworkExpected = 0;
+size_t speakerNetworkReceived = 0;
+uint8_t speakerNetworkHeader[12];
+size_t speakerNetworkHeaderReceived = 0;
+bool speakerNetworkReady = false;
 
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 10000;
@@ -82,6 +98,28 @@ void writeBigEndian32(uint32_t value) {
     static_cast<uint8_t>(value & 0xff),
   };
   audioClient.write(header, sizeof(header));
+}
+
+void writeAudioStreamHeader() {
+  audioClient.write(reinterpret_cast<const uint8_t *>("AUD0"), 4);
+  uint8_t header[8] = {
+    static_cast<uint8_t>((MIC_SAMPLE_RATE >> 24) & 0xff),
+    static_cast<uint8_t>((MIC_SAMPLE_RATE >> 16) & 0xff),
+    static_cast<uint8_t>((MIC_SAMPLE_RATE >> 8) & 0xff),
+    static_cast<uint8_t>(MIC_SAMPLE_RATE & 0xff),
+    0,
+    static_cast<uint8_t>(MIC_CHANNELS),
+    0,
+    16,
+  };
+  audioClient.write(header, sizeof(header));
+}
+
+uint32_t readBigEndian32(const uint8_t *bytes) {
+  return (static_cast<uint32_t>(bytes[0]) << 24) |
+         (static_cast<uint32_t>(bytes[1]) << 16) |
+         (static_cast<uint32_t>(bytes[2]) << 8) |
+         static_cast<uint32_t>(bytes[3]);
 }
 
 bool readFileBytes(File &file, uint8_t *buffer, size_t length) {
@@ -357,6 +395,7 @@ void connectAudioStreamIfNeeded() {
                 TEST_UNO_Q_AUDIO_PORT);
   if (audioClient.connect(TEST_UNO_Q_HOST, TEST_UNO_Q_AUDIO_PORT)) {
     audioClient.setNoDelay(true);
+    writeAudioStreamHeader();
     Serial.println("Audio stream connected.");
   } else {
     Serial.printf(
@@ -365,6 +404,28 @@ void connectAudioStreamIfNeeded() {
       TEST_UNO_Q_HOST, TEST_UNO_Q_AUDIO_PORT,
       WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(),
       static_cast<int>(WiFi.status()));
+  }
+}
+
+void resetSpeakerNetworkState() {
+  speakerNetworkExpected = 0;
+  speakerNetworkReceived = 0;
+  speakerNetworkHeaderReceived = 0;
+  speakerNetworkReady = false;
+}
+
+void connectSpeakerStreamIfNeeded() {
+  if (WiFi.status() != WL_CONNECTED || speakerClient.connected() ||
+      millis() - lastSpeakerConnectAttempt < 1000) {
+    return;
+  }
+
+  lastSpeakerConnectAttempt = millis();
+  if (speakerClient.connect(TEST_UNO_Q_HOST, TEST_UNO_Q_SPEAKER_PORT)) {
+    speakerClient.setNoDelay(true);
+    resetSpeakerNetworkState();
+    Serial.printf("Speaker stream connected to %s:%d.\n", TEST_UNO_Q_HOST,
+                  TEST_UNO_Q_SPEAKER_PORT);
   }
 }
 
@@ -379,7 +440,7 @@ void streamMicFrame() {
     return;
   }
 
-  for (size_t index = 0; index < AUDIO_FRAME_SAMPLES; ++index) {
+  for (size_t index = 0; index < AUDIO_FRAME_SAMPLES * MIC_CHANNELS; ++index) {
     micPcm[index] = convertMicSample(micRaw[index]);
   }
 
@@ -388,6 +449,89 @@ void streamMicFrame() {
   audioClient.write(reinterpret_cast<const uint8_t *>(micPcm), payloadBytes);
   if (!audioClient.connected()) {
     audioClient.stop();
+  }
+}
+
+void pumpNetworkSpeaker() {
+  if (!speakerClient.connected()) {
+    resetSpeakerNetworkState();
+    return;
+  }
+
+  while (speakerClient.available()) {
+    if (!speakerNetworkReady) {
+      const size_t remaining = sizeof(speakerNetworkHeader) -
+                               speakerNetworkHeaderReceived;
+      const size_t count = min(remaining,
+                               static_cast<size_t>(speakerClient.available()));
+      const size_t read = speakerClient.read(
+        speakerNetworkHeader + speakerNetworkHeaderReceived, count);
+      if (read == 0) {
+        return;
+      }
+      speakerNetworkHeaderReceived += read;
+      if (speakerNetworkHeaderReceived < sizeof(speakerNetworkHeader)) {
+        return;
+      }
+      if (memcmp(speakerNetworkHeader, "AUD0", 4) != 0 ||
+          readBigEndian32(speakerNetworkHeader + 4) != SPEAKER_SAMPLE_RATE ||
+          speakerNetworkHeader[9] != 1 || speakerNetworkHeader[11] != 16) {
+        Serial.println("Speaker stream header rejected.");
+        speakerClient.stop();
+        resetSpeakerNetworkState();
+        return;
+      }
+      speakerNetworkReady = true;
+    }
+
+    if (speakerNetworkExpected == 0) {
+      uint8_t frameHeader[4];
+      const size_t available = speakerClient.available();
+      if (available < sizeof(frameHeader)) {
+        return;
+      }
+      if (speakerClient.read(frameHeader, sizeof(frameHeader)) !=
+          sizeof(frameHeader)) {
+        return;
+      }
+      speakerNetworkExpected = readBigEndian32(frameHeader);
+      speakerNetworkReceived = 0;
+      if (speakerNetworkExpected == 0 ||
+          speakerNetworkExpected > MAX_NETWORK_SPEAKER_FRAME_BYTES ||
+          (speakerNetworkExpected & 1U) != 0) {
+        Serial.println("Speaker stream frame rejected.");
+        speakerClient.stop();
+        resetSpeakerNetworkState();
+        return;
+      }
+    }
+
+    const size_t remaining = speakerNetworkExpected - speakerNetworkReceived;
+    const size_t count = min(remaining,
+                             static_cast<size_t>(speakerClient.available()));
+    if (count == 0) {
+      return;
+    }
+    const size_t read = speakerClient.read(
+      speakerNetworkFrame + speakerNetworkReceived, count);
+    speakerNetworkReceived += read;
+    if (speakerNetworkReceived < speakerNetworkExpected) {
+      return;
+    }
+
+    // A local WAV has priority over network playback. Manual mode normally
+    // has no local sound playing, and the mutex keeps both I2S writers safe.
+    if (soundMutex != nullptr) {
+      xSemaphoreTake(soundMutex, portMAX_DELAY);
+    }
+    if (soundDataRemaining == 0) {
+      speakerI2S.write(speakerNetworkFrame, speakerNetworkExpected);
+    }
+    if (soundMutex != nullptr) {
+      xSemaphoreGive(soundMutex);
+    }
+    speakerNetworkExpected = 0;
+    speakerNetworkReceived = 0;
   }
 }
 
@@ -524,5 +668,7 @@ void loop() {
   readPlayCommands();
   maintainWiFi();
   connectAudioStreamIfNeeded();
+  connectSpeakerStreamIfNeeded();
   streamMicFrame();
+  pumpNetworkSpeaker();
 }

@@ -7,7 +7,7 @@ app still uses face recognition for its LED expression and familiar-face sound.
 
 ```mermaid
 flowchart LR
-  M[INMP441] -->|24 kHz PCM16 over TCP| Q[UNO Q Linux]
+  M[One INMP441 mic] -->|24 kHz mono PCM16 over TCP| Q[UNO Q Linux]
   Q -->|Realtime WebSocket| O[gpt-realtime-2.1-mini]
   O -->|move_robot function call| Q
   Q -->|SND:B/S/E\n over Serial1| E[ESP32]
@@ -21,11 +21,12 @@ flowchart LR
 - `python/main.py`: normal vision application with speech running in the
   background; speech movement commands do not require a familiar face.
 - `sketch/sketch.ino`: adds the safe `play_test_sound` Bridge function.
-- `esp32_speech_test/speech_test/speech_test.ino`: one-microphone capture and local tone playback.
+- `esp32_speech_test/speech_test/speech_test.ino`: one-microphone capture, local
+  tone playback, and the manual-mode laptop speaker stream.
 
 ## Wiring for this first test
 
-Use one INMP441 and one MAX98357A. The pin numbers below are starting points;
+Use one INMP441 microphone and one MAX98357A. The pin numbers below are starting points;
 check them against the existing ESP32 servo wiring before powering the board.
 
 | Device | Signal | ESP32 pin |
@@ -33,7 +34,7 @@ check them against the existing ESP32 servo wiring before powering the board.
 | INMP441 | SCK/BCLK | GPIO26 |
 | INMP441 | WS/LRCLK | GPIO25 |
 | INMP441 | SD | GPIO33 |
-| INMP441 | L/R | GND (left slot) |
+| INMP441 | L/R | GPIO4 driven LOW, or connect directly to GND |
 | MAX98357A | BCLK | GPIO14 |
 | MAX98357A | LRC/WS | GPIO13 |
 | MAX98357A | DIN | GPIO32 |
@@ -41,10 +42,11 @@ check them against the existing ESP32 servo wiring before powering the board.
 
 Connect grounds together. Power the INMP441 from 3.3 V. Connect the MAX98357A
 speaker only to `OUTP` and `OUTN`; do not connect either speaker lead to GND.
-Set the MAX98357A `SD_MODE` for the left channel.
+Connect the microphone to GPIO33, BCLK, and WS. Set its `L/R` pin LOW for
+the left I2S slot. Set the MAX98357A `SD_MODE` for the left channel.
 
 The ESP32 test firmware uses separate I2S controllers: the microphone runs at
-24 kHz for Realtime input, while the MAX98357A test tone runs at 16 kHz. This
+24 kHz for Realtime/manual streaming, while the MAX98357A runs at 16 kHz. This
 is deliberate because the MAX98357A does not support a 24 kHz LRCLK.
 
 ## Configure without committing secrets
@@ -77,15 +79,21 @@ Do not put that value in this repository.
 3. Press **Run** in App Lab. App Lab installs the Python dependency from
    `python/requirements.txt` and starts the speech test.
 
-   The project manifest exposes TCP port 3333 to the LAN:
+   The project manifest exposes the ESP32 speech input port and the manual
+   media ports to the LAN:
 
    ```yaml
    ports:
      - 3333
+     - 3334
+     - 3335
+     - 3336
+     - 8080
    ```
 
    This is required because the Python process runs inside the App Lab
-   runtime; without the port declaration, the ESP32 cannot reach the listener.
+   runtime; without the port declaration, the ESP32 and laptop cannot reach
+   the listeners.
 
 4. Confirm the App Lab console shows:
 
@@ -132,7 +140,7 @@ the runtime that provides `arduino.app_utils.Bridge`.
 The sound UART uses a short framed command containing one uppercase byte:
 `SND:B` = beep, `SND:S` = success, and `SND:E` = error. The ESP32 silently
 discards invalid/noisy frames. The UNO Q terminal should show
-`UNO Q audio RX` with PCM frame counts and
+`UNO Q audio RX` with mono PCM frame counts and
 microphone levels, followed by `SPEECH_RECEIVED`, a Realtime transcript,
 `Realtime tool call`,
 and `UNO Q sent command to ESP32`. The UNO Q MCU serial output should show
