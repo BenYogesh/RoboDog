@@ -2,6 +2,14 @@
 
 Arduino UNO Q vision app for the RoboDog quadruped.
 
+Included capabilities:
+
+- Hand-gesture detection and movement commands
+- Face recognition and familiar-face gating
+- Ball detection and autonomous tracking
+- Bluetooth-only manual control on the ESP32
+- Live webcam feed while manual mode is active
+
 For a guided explanation of the code layout and runtime dataflow, see
 [`docs/system-structure-dataflow.md`](docs/system-structure-dataflow.md).
 
@@ -12,8 +20,7 @@ and board-side testing, see
 For the ESP32 leg kinematics, gait tuning, balancing, and safe gait tests, see
 [`docs/esp32-gait-control.md`](docs/esp32-gait-control.md).
 
-For manual Bluetooth control with camera/microphone streaming and optional
-laptop speaker audio, see
+For manual Bluetooth control with a live webcam feed, see
 [`docs/manual-control.md`](docs/manual-control.md).
 
 The Python app is `python/main.py` and uses this camera path:

@@ -3,7 +3,5 @@ profiles:
     fqbn: 
     platforms:
       - platform: arduino:zephyr
-    libraries:
-      - SSD1306Ascii (1.3.5)
 
 default_profile: default

@@ -4,7 +4,7 @@ Chương trình chính của robot được chia làm 2 nửa, chạy trên 2 m�
 
 - **Arduino Uno Q**: Chia làm 2 bộ phận
   - Chip Qualcomm Dragonwing QRB2210: Chạy hệ điều hành Debian Linux, lập trình bằng ngôn ngữ Python. Xử lý đầu vào hình ảnh từ camera, chạy mô hình nhận dạng, so sánh với cơ sở dữ liệu khuôn mặt, phát hiện cử chỉ, đồ vật (quả bóng). Đưa ra lệnh hành động cho robot dựa trên kết quả xử lý.
-  - Chip STM32U585: Chạy hệ điều hành Arduino Zephyr, lập trình bằng ngôn ngữ C++. Chức năng làm cầu nối từ chương trình xử lý hình ảnh tới chương trình xử lý vận động trên chip ESP32 thông qua Serial. Đồng thời hiển thị một số thông tin cần thiết lên màn hình OLED SSD1306 và ma trận LED có sẵn trên bảng mạch.
+  - Chip STM32U585: Chạy hệ điều hành Arduino Zephyr, lập trình bằng ngôn ngữ C++. Chức năng làm cầu nối từ chương trình xử lý hình ảnh tới chương trình xử lý vận động trên chip ESP32 thông qua Serial và hiển thị trạng thái khuôn mặt trên ma trận LED có sẵn.
 - **ESP32S**:
   - Nhận tín hiệu từ Arduino Uno Q, kết hợp với việc đọc cảm ứng góc nghiêng MPU6050 và thuật toán PID để tinh chỉnh sai số, từ đó gửi tín hiệu điều khiển các servo ST3215 để robot chuyển động.
  
@@ -26,7 +26,6 @@ flowchart TD
     Gate --> Bridge
     Chase --> Bridge
     Bridge --> Sketch["sketch/sketch.ino <br>xử lý Bridge"]
-    Sketch --> OLED["Hiển thị trạng thái <br>lên OLED"]
     Sketch --> Matrix["Hiển thị lên <br>ma trận LED của Uno Q"]
     Sketch --> UART["Gửi tín hiệu <br>tới ESP32 qua Serial1"]
 ```
@@ -34,8 +33,10 @@ flowchart TD
 ## Chỉ mục các file code
 | Đường dẫn | Chức năng |
 | --- | --- |
-| `sketch/sketch.ino` | Code xử lý Bridge - giao tiếp giữa 2 chip trong Arduino Uno Q. Xử lý đầu ra OLED SSD1306, ma trận LED có sẵn, đưa tín hiệu tới ESP32 thông qua Serial1 |
+| `sketch/sketch.ino` | Code xử lý Bridge - giao tiếp giữa 2 chip trong Arduino Uno Q. Điều khiển ma trận LED, đưa tín hiệu tới ESP32 và chuyển thông báo chế độ Bluetooth về Python. |
 | `python/main.py` | Code điều phối chính: Xử lý luồng hình ảnh từ camera; Chạy mô hình nhận dạng khuôn mặt, cử chỉ, đồ vật; Chuyển đổi trạng thái robot; Giao tiếp Bridge. |
+| `python/manual_video.py` | Phát luồng MJPEG từ webcam trên cổng 8080 khi ESP32 báo đang ở chế độ Bluetooth thủ công. |
+| `dog_esp32/dog_esp32.ino` | Firmware chuyển động, camera servo, Bluetooth và watchdog trên ESP32. |
 | `python/detector.py` | Code nhận dạng cử chỉ bàn tay, sử dụng mô hình MediaPipe. |
 | `python/hand_models/` | Thư mục chứa các file mô hình MediaPipe giúp nhận dạng bàn tay. |
 | `python/face_gate.py` | Code nhận dạng khuông mặt, sử dụng mô hình YuNet và SFace. |
@@ -46,8 +47,8 @@ flowchart TD
 | `python/requirements.txt` | Danh sách các thư viện Python cần sử dụng. |
 
 ## Quá trình khởi động
-1. `sketch/sketch.ino` mở cổng `Serial1` và cổng I2C kết nối đến OLED, khởi động ma trận LED trên Arduino UNO Q, và thư viện Arduino Router Bridge.
-2. `sketch/sketch.ino` khai báo 3 chương trình giao tiếp trên Bridge: `update_oled`, `send_motor_command`, và `update_face_matrix`.
+1. `sketch/sketch.ino` mở cổng `Serial1`, khởi động ma trận LED trên Arduino UNO Q và thư viện Arduino Router Bridge.
+2. `sketch/sketch.ino` khai báo hai hàm Bridge: `send_motor_command` và `update_face_matrix`; đồng thời chuyển `MODE:MANUAL`/`MODE:AUTO` từ ESP32 về Python.
 3. `python/main.py` khởi động, chạy `Bridge`, mở luồng hình ảnh `CameraStream` từ webcam.
 4. `python/main.py` khai báo 3 chương trình xử lý hình ảnh: `HandGestureDetector`, `FaceGate`, và `BallTracker`.
 5. `verify_face_models()` kiểm tra mô hình YuNet và SFace đã cài đặt có tương thích với OpenCV không.
@@ -63,14 +64,13 @@ Mỗi vòng lặp của `main_loop` trong `python/main.py` sẽ chạy theo th�
 6. Chạy code nhận diện khuôn mặt. Nếu không nhìn thấy mặt mà nhìn thấy chân, ra lệnh ngẩng camera lên.
 7. Chuyển kết quả nhận diện thành mệnh lệnh, bao gồm các thành phần:
    - Lệnh di chuyển tới ESP32.
-   - Hiển thị tin nhắn debug lên OLED SSD1306.
+   - Ghi trạng thái debug vào terminal.
    - Cập nhận hiển thị cho ma trận led có sẵn.
 9. Gửi mệnh lệnh qua Bridge tới `sketch/sketch.ino`. 
 
 ### Giao tiếp Bridge giữa Python và Arduino
 | Lệnh từ Python | Hàm xử lý trong Arduino | Chức năng |
 | --- | --- | --- |
-| `bridge.call("update_oled", text)` | `handle_gesture(String command)` | Xóa màn OLED để in dòng chữ mới |
 | `bridge.call("update_face_matrix", expression)` | `handle_face_expression(String expression)` | Vẽ biểu cảm khuôn mặt lên ma trận LED trên Uno Q |
 | `bridge.call("send_motor_command", command)` | `send_motor_command(String command)` | Chuyển lệnh tới ESP32 qua `Serial1`. |
 
@@ -176,10 +176,10 @@ Khi vào trạng thái đuổi theo mục tiêu, robot sẽ được đưa về 
 
 Mỗi vài khung hình, `main.py` sẽ kiểm tra nhận diện cử chỉ tay một lần. Nếu phát hiện lệnh chỉ xuống dưới, robot sẽ lập tức thoát trạng thái đuổi theo mục tiêu.
 
-## Hiển thị thông tin:
-Robot sử dụng 1 màn hình OLED SSD1306 và ma trận LED có sẵn trên Arduino Uno Q để hiển thị thông tin giúp hỗ trợ vận hành robot:
-- OLED: `_update_oled(display_text)` gửi thông tin trạng thái robot, như kết quả nhận diện cử chỉ tay, nhận diện khuôn mặt, trạng thái robot, một số thông báo lỗi như không phát hiện camera, v.v...
-- Ma trận LED 13x8: `set_face_matrix(expression)` hiển thị một biểu cảm khuôn mặt `smiley`, `indifferent`,... tùy theo kết quả nhận diện khuôn mặt
+## Hiển thị thông tin
+Ma trận LED 13x8 của Uno Q hiển thị biểu cảm `smiley`, `indifferent`,... theo
+kết quả nhận diện khuôn mặt. Các trạng thái chi tiết được `_log_status()` ghi
+vào terminal của ứng dụng.
 
 ## Mở rộng hệ thống
 ### Cách thêm các cử chỉ tay mới
@@ -207,7 +207,7 @@ Nhớ điều chỉnh đường dẫn camera nếu cần trong: `python/main.py`
 3. Xây lại cơ sở dữ liệu khuôn mặt nếu có thay đổi:
    `python3 python/enroll_faces.py`
 4. Chạy app DogVision trên App Lab, hoặc chạy `python3 python/main.py`
-5. Xác nhận OLED không hiển thị `CAM FAILED`.
+5. Xác nhận terminal không báo `CAMERA ERROR`.
 6. Test các cử chỉ khi đang đứng:
    Xòe tay, chỉ lên trên, chỉ sang trái, chỉ sang phải, chỉ xuống dưới, nắm tay, v.v...
 7. Test thay đổi trạng thái:
@@ -217,4 +217,4 @@ Nhớ điều chỉnh đường dẫn camera nếu cần trong: `python/main.py`
    Khi `REQUIRE_FAMILIAR_FACE` được bật, robot phải bỏ qua cử chỉ từ người lạ.
 9. Test trạng thái đuổi theo mục tiêu:
    Nắm tay để vào trạng thái đuổi mục tiêu, chỉ xuống để thoát trạng thái, phát hiện một quả bóng ở gần sẽ dừng trạng thái đuổi.
-10. Theo dõi hiển thị trên màn OLED để xem các mệnh lệnh có đúng như dự định không.
+10. Theo dõi các dòng `ROBOT_STATUS` trong terminal để xác nhận mệnh lệnh.

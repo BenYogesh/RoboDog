@@ -1,11 +1,6 @@
 #include <Arduino_RouterBridge.h>
-#include <Wire.h>
-#include "SSD1306Ascii.h"
-#include "SSD1306AsciiWire.h"
-#include "Arduino_LED_Matrix.h" // Brought back!
+#include "Arduino_LED_Matrix.h"
 
-#define I2C_ADDRESS 0x3C
-SSD1306AsciiWire oled;
 ArduinoLEDMatrix matrix;
 String esp32StatusLine;
 
@@ -63,11 +58,6 @@ void drawMatrixFrame(const byte frame[8][13]) {
   matrix.loadFrame(packedFrame);
 }
 
-void handle_oled_text(String command) {
-  oled.clear();
-  oled.println(command);
-}
-
 void handle_face_expression(String expression) {
   if (expression == "smiley") {
     drawMatrixFrame(FACE_SMILEY);
@@ -103,19 +93,6 @@ void send_motor_command(String command) {
   Serial1.write('\n');
 }
 
-void set_control_mode(String mode) {
-  // The ESP32 gait firmware owns Bluetooth input.  This frame tells it when
-  // to ignore Uno Q autonomous/voice motion and accept Bluetooth only.
-  mode.trim();
-  mode.toLowerCase();
-  if (mode == "manual") {
-    Serial1.print("MODE:MANUAL\n");
-  } else if (mode == "automatic" || mode == "auto") {
-    Serial1.print("MODE:AUTO\n");
-  }
-  Serial1.flush();
-}
-
 void read_esp32_status() {
   while (Serial1.available() > 0) {
     const char character = static_cast<char>(Serial1.read());
@@ -138,65 +115,16 @@ void read_esp32_status() {
   }
 }
 
-bool is_supported_test_sound(const String &sound) {
-  return sound == "beep" || sound == "success" || sound == "error";
-}
-
-char test_sound_command(const String &sound) {
-  if (sound == "beep") {
-    return 'B';
-  }
-  if (sound == "success") {
-    return 'S';
-  }
-  if (sound == "error") {
-    return 'E';
-  }
-  return '\0';
-}
-
-void play_test_sound(String sound) {
-  sound.trim();
-  sound.toLowerCase();
-  const char command = test_sound_command(sound);
-  if (!is_supported_test_sound(sound) || command == '\0') {
-    Serial.print("UNO Q rejected sound: ");
-    Serial.println(sound);
-    return;
-  }
-
-  // Keep the payload to one uppercase byte, but frame it so UART noise cannot
-  // accidentally trigger a sound. Lowercase bytes remain motion commands.
-  Serial.print("UNO Q UART TX: ");
-  Serial.print("SND:");
-  Serial.print(command);
-  Serial.print(" (PLAY:");
-  Serial.print(sound);
-  Serial.println(")");
-  Serial1.print("SND:");
-  Serial1.write(static_cast<uint8_t>(command));
-  Serial1.write('\n');
-  Serial1.flush();
-}
-
 void setup() {
   Serial.begin(115200);
   Serial1.begin(115200); // hardware UART on D0(RX)/D1(TX) -> ESP32
-
-  Wire.begin();
-  oled.begin(&Adafruit128x64, I2C_ADDRESS);
-  oled.setFont(Adafruit5x7);
-  oled.clear();
 
   // Initialize the UNO Q 13x8 matrix hardware
   matrix.begin();
   drawMatrixFrame(FACE_NEUTRAL);
 
   Bridge.begin();
-  Bridge.provide_safe("update_oled", handle_oled_text);
   Bridge.provide_safe("send_motor_command", send_motor_command);
-  Bridge.provide_safe("set_control_mode", set_control_mode);
-  Bridge.provide_safe("play_test_sound", play_test_sound);
   Bridge.provide_safe("update_face_matrix", handle_face_expression);
 }
 

@@ -2,29 +2,18 @@
 
 # Khai báo các thư viện cần thiết
 import os
-
-# App Lab launches this file as the Linux-side entrypoint. Set this toggle to
-# True for the speech-only test so it runs inside App Lab's Python runtime,
-# where arduino.app_utils.Bridge is available. Set it back to False to resume
-# the normal vision application.
-RUN_SPEECH_TEST_ONLY = False
-if RUN_SPEECH_TEST_ONLY:
-    from speech_test import main as run_speech_test
-
-    run_speech_test()
-    raise SystemExit
-
 import threading
 import time
 import traceback
 
 import cv2
+import numpy as np
 
 from arduino.app_utils import App, Bridge
 from ball_tracker import BallTracker
+from detector import HandGestureDetector
 from face_gate import FaceGate, verify_face_models
-from manual_media import ManualMediaServer
-from speech_test import MOVEMENT_COMMANDS, start_speech_service
+from manual_video import ManualVideoServer
 
 cv2.setNumThreads(1)    # Khởi tạo OpenCV để sử dụng một luồng duy nhất, tránh xung đột với các luồng khác
 bridge = Bridge()       # Khởi tạo cầu nối giữa Python và Arduino để gửi lệnh điều khiển robot
@@ -50,7 +39,6 @@ class CameraStream:
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not self.cap.isOpened():
             print(f"CAMERA ERROR: could not open '{path}'.")
-            bridge.call("update_oled", "CAM FAILED")
 
         self.lock = threading.Lock()
         self.frame = None
@@ -100,22 +88,26 @@ CAM_CMD_UP = "h"
 CAM_CMD_DOWN = "l"
 CAM_CMD_NEUTRAL = "n"
 CAM_CMD_SCAN_UP = "r"
+CAM_CMD_SCAN_DOWN = "v"
 CAM_CMD_SCAN_STOP = "x"
 
 # Camera scanning is time-based because the tilt servo is continuous rotation.
 CAMERA_SCAN_TIMEOUT_S = 1.5
 CAMERA_TARGET_LOST_S = 1.0
+CAMERA_HAND_CONFIRMATIONS = 2
 CAMERA_SCAN_FACE_CHECK_PERIOD_S = 0.25
 CAMERA_RETURN_SETTLE_S = 0.1
 
 CAMERA_SCAN_IDLE = "IDLE"
 CAMERA_SCAN_FACE_SCANNING = "FACE_SCANNING"
+CAMERA_SCAN_HAND_SCANNING = "HAND_SCANNING"
 CAMERA_SCAN_LOCKED = "LOCKED"
 CAMERA_SCAN_RETURNING = "RETURNING"
 
 cam = CameraStream(camera_path)
-manual_media = ManualMediaServer(cam.read)
-manual_media.start()
+manual_video = ManualVideoServer(cam.read)
+manual_video.start()
+detector = HandGestureDetector(score_threshold=0.6, conf_threshold=0.6)
 verify_face_models()
 face_gate = FaceGate()
 ball_tracker = BallTracker(
@@ -132,7 +124,9 @@ camera_scan_state = CAMERA_SCAN_IDLE
 camera_scan_started_at = 0.0
 camera_scan_direction = 0
 camera_net_offset_s = 0.0
+camera_hand_scan_limit_s = 0.0
 camera_target_last_seen_at = 0.0
+camera_hand_confirmations = 0
 camera_return_complete_at = 0.0
 
 
@@ -148,14 +142,17 @@ def set_cam_state(new_state):
     python_cam_state = new_state
 
 
-def start_camera_motion(now, command, direction, state):
+def start_camera_motion(now, command, direction, state, duration_limit_s):
     """Start continuous motion and track its signed timed offset from neutral."""
     global camera_scan_state, camera_scan_started_at, camera_scan_direction
-    global next_face_check_at, python_cam_state
+    global camera_hand_confirmations, camera_hand_scan_limit_s, python_cam_state
+    global next_face_check_at
     send_motor_command(command)
     camera_scan_state = state
     camera_scan_started_at = now
     camera_scan_direction = direction
+    camera_hand_scan_limit_s = duration_limit_s
+    camera_hand_confirmations = 0
     if state == CAMERA_SCAN_FACE_SCANNING:
         # Do not wait for the normal, slower face-recognition interval.
         next_face_check_at = now
@@ -163,16 +160,22 @@ def start_camera_motion(now, command, direction, state):
 
 
 def start_camera_scan(now):
-    """Start an upward face scan after legs are detected."""
+    """Start a face-first or hand-only upward scan after legs are detected."""
     global camera_net_offset_s
     if camera_scan_state != CAMERA_SCAN_IDLE:
         return
     camera_net_offset_s = 0.0
+    initial_state = (
+        CAMERA_SCAN_FACE_SCANNING
+        if REQUIRE_FAMILIAR_FACE
+        else CAMERA_SCAN_HAND_SCANNING
+    )
     start_camera_motion(
         now,
         CAM_CMD_SCAN_UP,
         1,
-        CAMERA_SCAN_FACE_SCANNING,
+        initial_state,
+        CAMERA_SCAN_TIMEOUT_S,
     )
 
 
@@ -180,7 +183,10 @@ def stop_camera_scan(now):
     """Stop active scanning and add its signed movement to the net offset."""
     global camera_scan_state, camera_net_offset_s, camera_scan_direction
     global camera_target_last_seen_at
-    if camera_scan_state != CAMERA_SCAN_FACE_SCANNING:
+    if camera_scan_state not in (
+        CAMERA_SCAN_FACE_SCANNING,
+        CAMERA_SCAN_HAND_SCANNING,
+    ):
         return 0.0
     send_motor_command(CAM_CMD_SCAN_STOP)
     travel_time = max(0.0, now - camera_scan_started_at)
@@ -191,13 +197,32 @@ def stop_camera_scan(now):
     return travel_time
 
 
+def start_hand_scan_below_face(now):
+    """Move down from a familiar face, stopping no lower than neutral."""
+    remaining_down_time = max(0.0, camera_net_offset_s)
+    if remaining_down_time <= 0.0:
+        return_camera_from_scan(now)
+        return False
+    start_camera_motion(
+        now,
+        CAM_CMD_SCAN_DOWN,
+        -1,
+        CAMERA_SCAN_HAND_SCANNING,
+        remaining_down_time,
+    )
+    return True
+
+
 def return_camera_from_scan(now):
-    """Return the camera to its neutral position after a face scan."""
-    global camera_scan_state, camera_net_offset_s
+    """Return with the remaining offset after both the up and down scan stages."""
+    global camera_scan_state, camera_hand_confirmations, camera_net_offset_s
     global camera_scan_direction, python_cam_state, camera_return_complete_at
     if camera_scan_state in (CAMERA_SCAN_IDLE, CAMERA_SCAN_RETURNING):
         return
-    if camera_scan_state == CAMERA_SCAN_FACE_SCANNING:
+    if camera_scan_state in (
+        CAMERA_SCAN_FACE_SCANNING,
+        CAMERA_SCAN_HAND_SCANNING,
+    ):
         camera_net_offset_s += camera_scan_direction * max(
             0.0, now - camera_scan_started_at
         )
@@ -208,29 +233,56 @@ def return_camera_from_scan(now):
         now + abs(camera_net_offset_s) + CAMERA_RETURN_SETTLE_S
     )
     camera_scan_state = CAMERA_SCAN_RETURNING
+    camera_hand_confirmations = 0
     python_cam_state = "N"
 
 
-def update_camera_scan(legs_detected, face_status, now):
-    """Advance legs -> face scan -> hold -> reduced timed return."""
-    global camera_scan_state, camera_target_last_seen_at
+def update_camera_scan(legs_detected, hand_detected, face_status, now):
+    """Advance legs -> face/hand scan -> hold -> reduced timed return."""
+    global camera_scan_state, camera_hand_confirmations, camera_target_last_seen_at
     global camera_net_offset_s
 
     if camera_scan_state == CAMERA_SCAN_IDLE:
         if legs_detected:
             start_camera_scan(now)
-            return "Scanning for familiar face"
+            return (
+                "Scanning for familiar face"
+                if REQUIRE_FAMILIAR_FACE
+                else "Scanning for hand"
+            )
         return None
 
     if camera_scan_state == CAMERA_SCAN_FACE_SCANNING:
         if face_status == "familiar":
             stop_camera_scan(now)
-            return "Familiar face found"
+            if hand_detected:
+                return "Familiar face and hand found"
+            if start_hand_scan_below_face(now):
+                return "Familiar face found; scanning down for hand"
+            return "No hand scan travel; returning"
 
         if now - camera_scan_started_at >= CAMERA_SCAN_TIMEOUT_S:
             return_camera_from_scan(now)
             return "Face scan timed out; returning"
         return "Scanning for familiar face"
+
+    if camera_scan_state == CAMERA_SCAN_HAND_SCANNING:
+        if hand_detected:
+            camera_hand_confirmations += 1
+            if camera_hand_confirmations >= CAMERA_HAND_CONFIRMATIONS:
+                stop_camera_scan(now)
+                return "Hand found"
+        else:
+            camera_hand_confirmations = 0
+
+        if now - camera_scan_started_at >= camera_hand_scan_limit_s:
+            return_camera_from_scan(now)
+            return "Hand scan timed out; returning"
+        return (
+            "Scanning down for hand"
+            if camera_scan_direction < 0
+            else "Scanning for hand"
+        )
 
     if camera_scan_state == CAMERA_SCAN_RETURNING:
         if now >= camera_return_complete_at:
@@ -239,24 +291,32 @@ def update_camera_scan(legs_detected, face_status, now):
             return "Camera returned"
         return "Returning camera"
 
-    # Once a familiar face is found, leave the lens there until recognition
-    # reports a loss for long enough to avoid returning on one missed frame.
-    if face_status == "familiar":
+    # Once a hand is found, leave the lens there until it is gone long enough
+    # to avoid returning during a brief dropped inference frame.
+    if hand_detected:
         camera_target_last_seen_at = now
-        return "Tracking familiar face"
-    if (
-        face_status != "none"
-        and now - camera_target_last_seen_at >= CAMERA_TARGET_LOST_S
-    ):
+        return "Tracking hand"
+    if now - camera_target_last_seen_at >= CAMERA_TARGET_LOST_S:
         return_camera_from_scan(now)
         return "Target lost; returning"
-    return "Holding familiar face"
+    return "Holding camera position"
 
 
+# Set this to False to allow gesture commands without a familiar face. Face
+# recognition and the LED expression still run for feedback.
+REQUIRE_FAMILIAR_FACE = True
 FACE_CHECK_PERIOD_S = 0.8
+FAMILIAR_GRACE_S = 3.0
+last_familiar_time = 0.0
 next_face_check_at = 0.0
 last_face_matrix_state = None
-last_face_status = "none"
+
+
+def commands_currently_allowed():
+    return (
+        not REQUIRE_FAMILIAR_FACE
+        or (time.time() - last_familiar_time) < FAMILIAR_GRACE_S
+    )
 
 
 def set_face_matrix(expression):
@@ -270,15 +330,6 @@ def set_face_matrix(expression):
     last_face_matrix_state = expression
 
 
-def play_robot_sound(sound):
-    """Ask the UNO Q MCU to send a framed sound event to the ESP32."""
-    try:
-        bridge.call("play_test_sound", sound)
-        print(f"ROBOT_SOUND_REQUESTED: {sound}")
-    except Exception as error:
-        print(f"Sound Bridge call failed: {error}")
-
-
 STATE_STANDING = "STANDING"
 STATE_SITTING = "SITTING"
 STATE_PRONE = "PRONE"
@@ -290,133 +341,89 @@ POSTURE_TRANSITION_COOLDOWN_S = 2.0
 command_cooldown_until = 0.0
 
 
-def send_control_mode(mode):
-    """Tell the UNO Q MCU which control source the ESP32 must accept."""
-    try:
-        bridge.call("set_control_mode", mode)
-    except Exception as error:
-        print(f"Control-mode Bridge call failed: {error}")
-
-
-def enter_manual_control(source="voice", notify_esp32=True):
-    """Stop autonomous motion and expose the LAN media streams."""
+def enter_manual_control():
+    """Pause autonomous vision decisions and expose the webcam feed."""
     global robot_state, command_cooldown_until
     global camera_scan_state, camera_scan_direction, camera_net_offset_s
-    global python_cam_state
-    send_motor_command(CMD_STOP)
-    # Manual control owns the camera position, so cancel any autonomous scan
-    # immediately instead of waiting for the vision loop to finish returning.
-    send_motor_command(CAM_CMD_NEUTRAL)
+    global camera_hand_confirmations, python_cam_state
+
     camera_scan_state = CAMERA_SCAN_IDLE
     camera_scan_direction = 0
     camera_net_offset_s = 0.0
+    camera_hand_confirmations = 0
     python_cam_state = "N"
-    if notify_esp32:
-        send_control_mode("manual")
     robot_state = STATE_MANUAL
     command_cooldown_until = 0.0
-    manual_media.set_active(True)
-    _update_oled("MANUAL CONTROL")
-    print(f"MANUAL_CONTROL_ENTERED source={source}")
+    manual_video.set_active(True)
+    _log_status("MANUAL CONTROL")
 
 
-def leave_manual_control(source="voice", notify_esp32=True):
-    """Return to the existing vision/voice-controlled state."""
+def leave_manual_control():
+    """Return to gesture, face, and ball processing after Bluetooth exits."""
     global robot_state, command_cooldown_until
     global camera_scan_state, camera_scan_direction, camera_net_offset_s
-    global python_cam_state
-    manual_media.set_active(False)
-    if notify_esp32:
-        send_control_mode("automatic")
-    send_motor_command(CMD_STOP)
-    send_motor_command(CAM_CMD_NEUTRAL)
+    global camera_hand_confirmations, python_cam_state
+
+    manual_video.set_active(False)
     camera_scan_state = CAMERA_SCAN_IDLE
     camera_scan_direction = 0
     camera_net_offset_s = 0.0
+    camera_hand_confirmations = 0
     python_cam_state = "N"
     robot_state = STATE_STANDING
     command_cooldown_until = time.time() + POSTURE_TRANSITION_COOLDOWN_S
-    _update_oled("AUTOMATIC CONTROL")
-    print(f"MANUAL_CONTROL_EXITED source={source}")
+    _log_status("AUTOMATIC CONTROL")
 
 
 def handle_esp32_control_mode(mode):
-    """Reflect a Bluetooth-originated mode change from the ESP32."""
-    mode = str(mode).lower().strip()
-    if mode == "manual" and robot_state != STATE_MANUAL:
-        enter_manual_control("bluetooth", notify_esp32=False)
-    elif mode in {"automatic", "auto"} and robot_state == STATE_MANUAL:
-        leave_manual_control("bluetooth", notify_esp32=False)
+    """Follow Bluetooth M/O mode notifications from the ESP32."""
+    normalized = str(mode).strip().lower()
+    if normalized == "manual" and robot_state != STATE_MANUAL:
+        enter_manual_control()
+    elif normalized in {"automatic", "auto"} and robot_state == STATE_MANUAL:
+        leave_manual_control()
+
+POINT_VERTICAL_THRESHOLD = 20.0
+WRIST = 0
+INDEX_TIP, INDEX_MCP = 8, 5
+MIDDLE_TIP, MIDDLE_MCP = 12, 9
+RING_TIP, RING_MCP = 16, 13
+PINKY_TIP, PINKY_MCP = 20, 17
 
 
-def handle_speech_command(command):
-    """Execute a Realtime movement command without face recognition gating."""
-    global robot_state, command_cooldown_until
+def is_folded(landmarks, tip_idx, mcp_idx, wrist_idx=WRIST):
+    tip = landmarks[tip_idx][:2]
+    mcp = landmarks[mcp_idx][:2]
+    wrist = landmarks[wrist_idx][:2]
+    return np.linalg.norm(tip - wrist) < np.linalg.norm(mcp - wrist)
 
-    command = str(command).lower().strip()
-    if command == "manual":
-        enter_manual_control("voice")
-        return {"status": "accepted", "command": command, "mode": "manual"}
-    if command == "automatic":
-        leave_manual_control("voice")
-        return {"status": "accepted", "command": command, "mode": "automatic"}
-    if robot_state == STATE_MANUAL:
-        print(f"SPEECH_COMMAND_REJECTED_MANUAL_MODE: {command!r}")
-        return {
-            "status": "rejected",
-            "message": "Manual mode accepts Bluetooth movement commands only",
-        }
-    uart_command = MOVEMENT_COMMANDS.get(command)
-    if uart_command is None:
-        print(f"SPEECH_COMMAND_REJECTED: {command!r}")
-        return {"status": "rejected", "message": "Unsupported movement"}
 
-    if command == "chase":
-        send_motor_command(CMD_STOP)
-        robot_state = STATE_CHASING
-        ball_tracker.start_chase()
-        set_cam_state("D")
-        command_cooldown_until = time.time() + POSTURE_TRANSITION_COOLDOWN_S
-        display_text = "VOICE: CHASE"
-        uart_command = CMD_STOP
-    else:
-        previous_state = robot_state
-        send_motor_command(uart_command)
-        if command == "sit":
-            robot_state = STATE_SITTING
-        elif command == "prone":
-            robot_state = STATE_PRONE
-        elif command in {"stand", "stop"}:
-            robot_state = STATE_STANDING
-        if previous_state == STATE_CHASING:
-            return_camera_from_scan(time.monotonic())
-        if robot_state == STATE_STANDING:
-            set_cam_state("N")
-        transition = command in {"sit", "prone", "stand", "stop", "chase"}
-        command_cooldown_until = time.time() + (
-            POSTURE_TRANSITION_COOLDOWN_S if transition else COMMAND_COOLDOWN_S
+def is_pointing_down(landmarks):
+    """Detect the pointing-down gesture used for sit and chase stop."""
+    if is_folded(landmarks, INDEX_TIP, INDEX_MCP):
+        return False
+    if not all(
+        is_folded(landmarks, tip, mcp)
+        for tip, mcp in (
+            (MIDDLE_TIP, MIDDLE_MCP),
+            (RING_TIP, RING_MCP),
+            (PINKY_TIP, PINKY_MCP),
         )
-        display_text = f"VOICE: {command.upper()}"
+    ):
+        return False
 
-    # Speech movement commands are allowed without a familiar face. The audio
-    # acknowledgement is generated locally rather than by a model tool call.
-    play_robot_sound("success")
-    print(f"SPEECH_COMMAND_ACCEPTED: {command} -> {uart_command}")
-    _update_oled(display_text)
-    return {
-        "status": "accepted",
-        "command": command,
-        "uart": uart_command,
-    }
+    dx = landmarks[INDEX_TIP][0] - landmarks[INDEX_MCP][0]
+    dy = landmarks[INDEX_TIP][1] - landmarks[INDEX_MCP][1]
+    return abs(dx) < abs(dy) and dy > POINT_VERTICAL_THRESHOLD
 
 
 inference_counter = 0
-last_text = ""
+last_status = ""
 
 
 def main_loop():
-    global inference_counter, last_text, robot_state, command_cooldown_until
-    global last_face_status, next_face_check_at
+    global inference_counter, robot_state, command_cooldown_until
+    global last_familiar_time, next_face_check_at
 
     try:
         frame = cam.read()
@@ -424,30 +431,21 @@ def main_loop():
             return
         frame = cv2.flip(frame, 1)
 
-        # Manual mode deliberately leaves the camera and microphone paths as
-        # relays.  No gesture, face, ball, or voice-generated movement is run.
+        # Bluetooth owns every movement command in manual mode. The camera
+        # reader continues running so ManualVideoServer can publish frames.
         if robot_state == STATE_MANUAL:
             return
 
-        now = time.monotonic()
-        face_status = "none"
-        if now >= next_face_check_at:
-            face_period = (
-                CAMERA_SCAN_FACE_CHECK_PERIOD_S
-                if camera_scan_state == CAMERA_SCAN_FACE_SCANNING
-                else FACE_CHECK_PERIOD_S
-            )
-            next_face_check_at = now + face_period
-            face_status, _ = face_gate.recognize(frame)
-            if face_status == "familiar":
-                if last_face_status != "familiar":
-                    play_robot_sound("beep")
-                set_face_matrix("smiley")
-            elif face_status == "unfamiliar":
-                set_face_matrix("indifferent")
-            last_face_status = face_status
-
         if robot_state == STATE_CHASING:
+            if ball_tracker.should_check_manual_stop():
+                hands = detector.detect(frame)
+                if hands and is_pointing_down(hands[0]["landmarks"]):
+                    send_motor_command(CMD_STOP)
+                    robot_state = STATE_STANDING
+                    command_cooldown_until = time.time() + COMMAND_COOLDOWN_S
+                    _log_status("Stopped (manual)")
+                    return
+
             ball, top_candidates, command, display_text, exit_reason = (
                 ball_tracker.command_for_frame(frame)
             )
@@ -468,7 +466,7 @@ def main_loop():
                 else:
                     display_text = "Searching, see: nothing"
 
-            _update_oled(display_text)
+            _log_status(display_text)
             return
 
         if time.time() < command_cooldown_until:
@@ -478,11 +476,31 @@ def main_loop():
         if inference_counter % 3 != 0:
             return
 
-        display_text = "WAITING FOR SPEECH"
+        hands = detector.detect(frame)
+        now = time.monotonic()
+        face_status = "none"
+        if now >= next_face_check_at:
+            face_period = (
+                CAMERA_SCAN_FACE_CHECK_PERIOD_S
+                if camera_scan_state == CAMERA_SCAN_FACE_SCANNING
+                else FACE_CHECK_PERIOD_S
+            )
+            next_face_check_at = now + face_period
+            face_status, _ = face_gate.recognize(frame)
+            if face_status == "familiar":
+                last_familiar_time = time.time()
+                set_face_matrix("smiley")
+            elif face_status == "unfamiliar":
+                set_face_matrix("indifferent")
+
+        command = None
+        display_text = "NO HAND"
+        posture_transition = False
         legs_detected = False
         if (
             robot_state == STATE_STANDING
             and camera_scan_state == CAMERA_SCAN_IDLE
+            and not hands
             and ball_tracker.should_check_camera()
         ):
             person_box = ball_tracker.detect_person(frame)
@@ -492,16 +510,97 @@ def main_loop():
 
         scan_display = update_camera_scan(
             legs_detected,
+            bool(hands),
             face_status,
             now,
         )
+        if hands:
+            landmarks = hands[0]["landmarks"]
+            folded = {
+                "index": is_folded(landmarks, INDEX_TIP, INDEX_MCP),
+                "middle": is_folded(landmarks, MIDDLE_TIP, MIDDLE_MCP),
+                "ring": is_folded(landmarks, RING_TIP, RING_MCP),
+                "pinky": is_folded(landmarks, PINKY_TIP, PINKY_MCP),
+            }
+            is_open_palm = not any(folded.values())
+            is_pointing = (
+                not folded["index"]
+                and folded["middle"]
+                and folded["ring"]
+                and folded["pinky"]
+            )
+            is_fist = all(folded.values())
+
+            point_left = point_right = point_up = point_down = False
+            if is_pointing:
+                dx = landmarks[INDEX_TIP][0] - landmarks[INDEX_MCP][0]
+                dy = landmarks[INDEX_TIP][1] - landmarks[INDEX_MCP][1]
+                if abs(dx) >= abs(dy):
+                    point_left = dx < -20.0
+                    point_right = dx > 20.0
+                else:
+                    point_down = dy > POINT_VERTICAL_THRESHOLD
+                    point_up = dy < -POINT_VERTICAL_THRESHOLD
+
+            if not commands_currently_allowed():
+                display_text = "Ignoring (unfamiliar)"
+            elif robot_state == STATE_STANDING:
+                if is_open_palm:
+                    command, display_text = CMD_STOP, "CMD: STOP (Palm)"
+                elif point_up:
+                    command, display_text = CMD_WALK, "CMD: WALK (w)"
+                elif point_left:
+                    command, display_text = CMD_LEFT, "CMD: LEFT (a)"
+                elif point_right:
+                    command, display_text = CMD_RIGHT, "CMD: RIGHT (d)"
+                elif point_down:
+                    command, display_text = CMD_SIT, "Sitting"
+                    robot_state = STATE_SITTING
+                    posture_transition = True
+                elif is_fist:
+                    command, display_text = CMD_STOP, "Ball Mode"
+                    robot_state = STATE_CHASING
+                    ball_tracker.start_chase()
+                    posture_transition = True
+                    set_cam_state("D")
+                else:
+                    display_text = "UNKNOWN SIGN"
+            elif robot_state == STATE_SITTING:
+                if point_down:
+                    command, display_text = CMD_PRONE, "Prone"
+                    robot_state = STATE_PRONE
+                    posture_transition = True
+                elif point_up:
+                    command, display_text = CMD_STAND_UP, "Standing"
+                    robot_state = STATE_STANDING
+                    posture_transition = True
+                else:
+                    display_text = "Sitting (point up/down)"
+            elif robot_state == STATE_PRONE:
+                if point_up:
+                    command, display_text = CMD_SIT, "Sitting"
+                    robot_state = STATE_SITTING
+                    posture_transition = True
+                else:
+                    display_text = "Prone (point up)"
+
+            if command is not None:
+                send_motor_command(command)
+                cooldown = (
+                    POSTURE_TRANSITION_COOLDOWN_S
+                    if posture_transition
+                    else COMMAND_COOLDOWN_S
+                )
+                command_cooldown_until = time.time() + cooldown
+            if robot_state == STATE_STANDING and camera_scan_state == CAMERA_SCAN_IDLE:
+                set_cam_state("N")
 
         if robot_state != STATE_STANDING:
             return_camera_from_scan(now)
-        elif scan_display is not None:
+        elif command is None and scan_display is not None:
             display_text = scan_display
 
-        _update_oled(display_text)
+        _log_status(display_text)
     except Exception:
         print("Loop Error:")
         traceback.print_exc()
@@ -509,26 +608,19 @@ def main_loop():
         send_motor_command(CMD_STOP)
 
 
-def _update_oled(display_text):
-    global last_text
-    if display_text == last_text:
+def _log_status(status):
+    global last_status
+    if status == last_status:
         return
-    bridge.call("update_oled", display_text)
-    last_text = display_text
+    print(f"ROBOT_STATUS: {status}")
+    last_status = status
 
 
 try:
-    # The MCU uses Bridge.notify when Bluetooth enters/exits manual mode.
     Bridge.provide("manual_mode_changed", handle_esp32_control_mode)
 except Exception as error:
     print(f"Could not register ESP32 mode callback: {error}")
 
-
-speech_service = start_speech_service(
-    bridge,
-    on_move=handle_speech_command,
-    on_audio_frame=manual_media.publish_audio_frame,
-)
 
 try:
     App.run(user_loop=main_loop)
@@ -536,6 +628,5 @@ except NameError:
     while True:
         main_loop()
 finally:
-    if speech_service is not None:
-        speech_service.stop()
-    manual_media.stop()
+    manual_video.stop()
+    cam.stop()

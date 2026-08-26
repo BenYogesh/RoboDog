@@ -127,17 +127,17 @@ CAMERA_RETURN_SETTLE_S = 0.1
    `sketch/sketch.ino` using the normal App Lab workflow.
 3. Power the camera servo from its external 5 V supply and confirm the common
    ground connection.
-4. Start the vision app. Check that the OLED does not report `CAM FAILED`.
+4. Start the vision app. Check that the terminal does not report `CAMERA ERROR`.
 5. With `REQUIRE_FAMILIAR_FACE = True`, stand where the camera sees only your
-   legs. The OLED should report `Scanning for familiar face`, and the lens
+   legs. The terminal should report `Scanning for familiar face`, and the lens
    should move upward.
-6. Let a familiar face enter the frame without raising a hand. The OLED should
+6. Let a familiar face enter the frame without raising a hand. The terminal should
    report `Familiar face found; scanning down for hand`; the lens should stop
    briefly, then move down. It should move down for no longer than it moved up.
-7. Raise a hand during that down-scan. The OLED should report `Hand found`.
+7. Raise a hand during that down-scan. The terminal should report `Hand found`.
    Move the hand out of view; after about one second, the return should use only
    the remaining up-minus-down time.
-8. Set `REQUIRE_FAMILIAR_FACE = False` and repeat. The OLED should report
+8. Set `REQUIRE_FAMILIAR_FACE = False` and repeat. The terminal should report
    `Scanning for hand`; a face alone must not stop the scan, but a confirmed
    hand must stop it.
 9. Repeat with no expected target visible. It should report a face- or

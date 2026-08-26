@@ -1,17 +1,19 @@
 # Cấu trúc code trên ESP32
 ## Các cách điều khiển
-ESP32 nhận kí tự mệnh lệnh từ Uno Q dưới dạng `CMD:<char>`, hoặc trực tiếp qua Bluetooth. Mệnh lệnh từ Bluetooth được ưu tiên trước Uno Q. 
+ESP32 nhận kí tự mệnh lệnh từ Uno Q dưới dạng `CMD:<char>`, hoặc trực tiếp qua Bluetooth. Mệnh lệnh từ Bluetooth được ưu tiên trước Uno Q.
 
-Khi ứng dụng Uno Q phát lệnh điều khiển tay, nó gửi thêm một khung UART:
+Nhấn `M` qua Bluetooth để bật chế độ điều khiển tay. ESP32 dừng chuyển động
+hiện tại, bỏ qua toàn bộ khung `CMD:<char>` từ Uno Q và gửi trạng thái sau về
+Uno Q:
 
 ```text
 MODE:MANUAL
 ```
 
-Firmware ESP32 chính (`Code/dog_esp32/dog_esp32.ino`) chuyển sang chế độ chỉ nhận lệnh Bluetooth và bỏ qua
-các khung `CMD:<char>` từ Uno Q cho tới khi nhận `MODE:AUTO`. Chế độ này cũng
-nên có watchdog an toàn cục bộ trên ESP32 để dừng robot khi Bluetooth mất kết
-nối. Xem `docs/manual-control.md` để biết giao thức đầy đủ và luồng media.
+Nhấn `O` qua Bluetooth để quay lại điều khiển tự động; ESP32 gửi `MODE:AUTO`
+về Uno Q. Firmware chính nằm tại `dog_esp32/dog_esp32.ino`. Watchdog cục bộ
+dừng chuyển động nếu không nhận lệnh mới trong `MOTION_COMMAND_TIMEOUT_MS`.
+Xem `docs/manual-control.md` để biết luồng điều khiển và webcam.
 Vòng lặp cử động chân tuân theo trình tự sau:
 
 ```text

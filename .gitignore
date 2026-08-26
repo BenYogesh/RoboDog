@@ -4,4 +4,4 @@ dogvenv/
 __pycache__/
 *.pyc
 python/debug_vision_*.jpg
-esp32_speech_test/**/secrets.h
+**/secrets.h
