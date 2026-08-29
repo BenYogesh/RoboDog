@@ -23,7 +23,7 @@ laptop speaker audio, see
 The Python app is `python/main.py` and uses this camera path:
 
 ```text
-/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0
+/dev/v4l/by-id/usb-HX-MT9M114-201012_Integrated_Camera-video-index0
 ```
 
 ## Enroll Known Faces
