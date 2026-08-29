@@ -203,7 +203,7 @@ Nhớ điều chỉnh đường dẫn camera nếu cần trong: `python/main.py`
 1. Cài đặt các thư viện Python cần thiết:
    `python3 -m pip install -r python/requirements.txt`
 2. Xác nhận đường dẫn tới camera:
-   `ls -l /dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0`
+   `ls -l /dev/v4l/by-id/usb-HX-MT9M114-201012_Integrated_Camera-video-index0`
 3. Xây lại cơ sở dữ liệu khuôn mặt nếu có thay đổi:
    `python3 python/enroll_faces.py`
 4. Chạy app DogVision trên App Lab, hoặc chạy `python3 python/main.py`

@@ -30,15 +30,18 @@ cv2.setNumThreads(1)    # Khởi tạo OpenCV để sử dụng một luồng du
 bridge = Bridge()       # Khởi tạo cầu nối giữa Python và Arduino để gửi lệnh điều khiển robot
 
 current_dir = os.path.dirname(os.path.abspath(__file__))                        # Thư mục hiện tại của file main.py
-camera_path = "/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0"    # Đường dẫn đến cổng webcam
+DEFAULT_CAMERA_PATH = "/dev/v4l/by-id/usb-HX-MT9M114-201012_Integrated_Camera-video-index0"
+camera_path = os.getenv("UNO_Q_CAMERA_PATH") or DEFAULT_CAMERA_PATH             # Đường dẫn đến cổng webcam
 
 
 def send_motor_command(command):
     # Gửi lệnh điều khiển động cơ đến Arduino thông qua cầu nối
     try:
         bridge.call("send_motor_command", command)
+        return True
     except Exception as error:
         print(f"Bridge call failed: {error}")
+        return False
 
 
 class CameraStream:
@@ -285,9 +288,13 @@ STATE_PRONE = "PRONE"
 STATE_CHASING = "CHASING"
 STATE_MANUAL = "MANUAL_CONTROL"
 robot_state = STATE_STANDING
+manual_control_source = None
 COMMAND_COOLDOWN_S = 0.7
 POSTURE_TRANSITION_COOLDOWN_S = 2.0
 command_cooldown_until = 0.0
+last_dashboard_command = None
+last_dashboard_command_at = None
+last_dashboard_error = None
 
 
 def send_control_mode(mode):
@@ -300,7 +307,7 @@ def send_control_mode(mode):
 
 def enter_manual_control(source="voice", notify_esp32=True):
     """Stop autonomous motion and expose the LAN media streams."""
-    global robot_state, command_cooldown_until
+    global robot_state, manual_control_source, command_cooldown_until
     global camera_scan_state, camera_scan_direction, camera_net_offset_s
     global python_cam_state
     send_motor_command(CMD_STOP)
@@ -314,6 +321,7 @@ def enter_manual_control(source="voice", notify_esp32=True):
     if notify_esp32:
         send_control_mode("manual")
     robot_state = STATE_MANUAL
+    manual_control_source = source
     command_cooldown_until = 0.0
     manual_media.set_active(True)
     _update_oled("MANUAL CONTROL")
@@ -322,7 +330,7 @@ def enter_manual_control(source="voice", notify_esp32=True):
 
 def leave_manual_control(source="voice", notify_esp32=True):
     """Return to the existing vision/voice-controlled state."""
-    global robot_state, command_cooldown_until
+    global robot_state, manual_control_source, command_cooldown_until
     global camera_scan_state, camera_scan_direction, camera_net_offset_s
     global python_cam_state
     manual_media.set_active(False)
@@ -335,6 +343,7 @@ def leave_manual_control(source="voice", notify_esp32=True):
     camera_net_offset_s = 0.0
     python_cam_state = "N"
     robot_state = STATE_STANDING
+    manual_control_source = None
     command_cooldown_until = time.time() + POSTURE_TRANSITION_COOLDOWN_S
     _update_oled("AUTOMATIC CONTROL")
     print(f"MANUAL_CONTROL_EXITED source={source}")
@@ -342,9 +351,18 @@ def leave_manual_control(source="voice", notify_esp32=True):
 
 def handle_esp32_control_mode(mode):
     """Reflect a Bluetooth-originated mode change from the ESP32."""
+    global manual_control_source
     mode = str(mode).lower().strip()
-    if mode == "manual" and robot_state != STATE_MANUAL:
-        enter_manual_control("bluetooth", notify_esp32=False)
+    if mode == "manual":
+        if robot_state != STATE_MANUAL:
+            enter_manual_control("bluetooth", notify_esp32=False)
+        elif manual_control_source != "bluetooth":
+            # A Bluetooth M command can take ownership while the dashboard is
+            # open. Keep the media page alive, but reject dashboard movement
+            # until the ESP32 reports automatic mode again.
+            manual_control_source = "bluetooth"
+            _update_oled("BLUETOOTH CONTROL")
+            print("MANUAL_CONTROL_OWNER=bluetooth")
     elif mode in {"automatic", "auto"} and robot_state == STATE_MANUAL:
         leave_manual_control("bluetooth", notify_esp32=False)
 
@@ -407,6 +425,132 @@ def handle_speech_command(command):
         "status": "accepted",
         "command": command,
         "uart": uart_command,
+    }
+
+
+# The supplied gait firmware accepts Uno Q CMD frames while it is in its
+# automatic control mode. Dashboard mode pauses the UNO Q vision loop, then
+# deliberately leaves the ESP32 in that UART-accepting mode. Bluetooth can
+# still take priority; handle_esp32_control_mode reports that ownership change
+# to the dashboard.
+DASHBOARD_COMMANDS = {
+    "forward": "w",
+    "backward": "b",
+    "turn_left": "a",
+    "turn_right": "d",
+    "crab_left": "e",
+    "crab_right": "f",
+    "pace": "p",
+    "stop": "s",
+    "stand": "s",
+    "hold": "z",
+    "sit": "q",
+    "prone": "c",
+    "wave": "g",
+    "bounce": "u",
+    "jump": "j",
+    "center": "k",
+    "camera_up": "h",
+    "camera_down": "l",
+    "camera_neutral": "n",
+    "camera_scan_up": "r",
+    "camera_scan_down": "v",
+    "camera_stop": "x",
+}
+
+
+def handle_dashboard_command(command):
+    """Accept one dashboard command when the dashboard owns manual mode."""
+    global last_dashboard_command, last_dashboard_command_at, last_dashboard_error
+
+    normalized = str(command).lower().strip()
+    uart_command = DASHBOARD_COMMANDS.get(normalized)
+    if uart_command is None and len(normalized) == 1:
+        # Allow the dashboard to use the same one-character vocabulary as the
+        # ESP32 firmware, while still rejecting arbitrary UART payloads.
+        supported = set(DASHBOARD_COMMANDS.values())
+        if normalized in supported:
+            uart_command = normalized
+    if uart_command is None:
+        last_dashboard_error = f"Unsupported dashboard command: {normalized!r}"
+        return {"status": "rejected", "message": last_dashboard_error}
+
+    if robot_state != STATE_MANUAL or manual_control_source != "dashboard":
+        owner = manual_control_source or "automatic"
+        last_dashboard_error = f"Dashboard is not the active control source ({owner})"
+        return {"status": "rejected", "message": last_dashboard_error}
+
+    if not send_motor_command(uart_command):
+        last_dashboard_error = "Could not send command through the UNO Q bridge"
+        return {"status": "error", "message": last_dashboard_error}
+
+    last_dashboard_command = normalized
+    last_dashboard_command_at = time.time()
+    last_dashboard_error = None
+    _update_oled(f"WEB: {normalized.upper()}")
+    print(f"DASHBOARD_COMMAND_ACCEPTED: {normalized} -> {uart_command}")
+    return {
+        "status": "accepted",
+        "command": normalized,
+        "uart": uart_command,
+    }
+
+
+def handle_dashboard_mode(mode):
+    """Enter or leave the dashboard's browser-controlled state."""
+    global last_dashboard_error
+
+    normalized = str(mode).lower().strip()
+    if normalized in {"manual", "dashboard"}:
+        if robot_state == STATE_MANUAL and manual_control_source == "bluetooth":
+            last_dashboard_error = "Bluetooth currently owns manual control"
+            return {"status": "rejected", "message": last_dashboard_error}
+        if robot_state != STATE_MANUAL or manual_control_source != "dashboard":
+            enter_manual_control("dashboard", notify_esp32=False)
+            # The supplied gait firmware only accepts Uno Q CMD frames in its
+            # automatic mode. Python autonomy is paused above, so the browser
+            # becomes the only normal Uno Q command source in this state.
+            send_control_mode("automatic")
+        last_dashboard_error = None
+        print("DASHBOARD_CONTROL_ENTERED")
+        return {"status": "accepted", "mode": "dashboard"}
+
+    if normalized in {"automatic", "auto"}:
+        if robot_state == STATE_MANUAL:
+            leave_manual_control("dashboard")
+        last_dashboard_error = None
+        print("DASHBOARD_CONTROL_EXITED")
+        return {"status": "accepted", "mode": "automatic"}
+
+    last_dashboard_error = f"Unsupported dashboard mode: {normalized!r}"
+    return {"status": "rejected", "message": last_dashboard_error}
+
+
+def dashboard_status():
+    """Return the small state snapshot used by the browser dashboard."""
+    if robot_state == STATE_MANUAL:
+        control_mode = f"manual-{manual_control_source or 'unknown'}"
+    else:
+        control_mode = "automatic"
+    realtime = globals().get("speech_service")
+    return {
+        "control_mode": control_mode,
+        "robot_state": robot_state,
+        "manual_source": manual_control_source,
+        "camera_path": camera_path,
+        "speech_input": os.getenv("UNO_Q_SPEECH_INPUT", "usb"),
+        "microphone_device": os.getenv("UNO_Q_MIC_DEVICE", "default"),
+        "face_status": last_face_status,
+        "camera_scan_state": camera_scan_state,
+        "speech_enabled": bool(os.getenv("OPENAI_API_KEY")),
+        "realtime_ready": bool(
+            realtime is not None
+            and realtime.realtime is not None
+            and realtime.realtime.ready.is_set()
+        ),
+        "last_command": last_dashboard_command,
+        "last_command_at": last_dashboard_command_at,
+        "last_error": last_dashboard_error,
     }
 
 
@@ -515,6 +659,13 @@ def _update_oled(display_text):
         return
     bridge.call("update_oled", display_text)
     last_text = display_text
+
+
+manual_media.configure_dashboard(
+    command_handler=handle_dashboard_command,
+    mode_handler=handle_dashboard_mode,
+    status_provider=dashboard_status,
+)
 
 
 try:

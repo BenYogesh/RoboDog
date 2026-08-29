@@ -1,9 +1,12 @@
 """UNO Q Realtime speech service.
 
-The ESP32 sends length-prefixed, little-endian PCM16 mono frames over TCP.
-This process forwards those frames to the OpenAI Realtime WebSocket. The
-normal robot application exposes a ``move_robot`` function; the standalone
-test can instead expose the local ``play_sound`` function.
+The default input is the USB webcam microphone attached directly to the UNO Q.
+The Linux side captures little-endian PCM16 mono frames with ALSA/``arecord``
+and forwards them to the OpenAI Realtime WebSocket.  A legacy ESP32 TCP input
+can still be selected with ``UNO_Q_SPEECH_INPUT=esp32`` while old firmware is
+being retired.  The normal robot application exposes a ``move_robot``
+function; the standalone test can instead expose the local ``play_sound``
+function.
 
 Run this file directly on the UNO Q Linux side. It intentionally does not
 start the existing camera/vision application.
@@ -25,6 +28,12 @@ from typing import Any, Callable
 
 import websocket
 from arduino.app_utils import Bridge
+from local_microphone import (
+    AlsaMicrophone,
+    AudioCaptureError,
+    DEFAULT_FRAME_MS,
+    configured_device,
+)
 from media_protocol import (
     AUDIO_HEADER as MIC_STREAM_HEADER,
     AUDIO_MAGIC as MIC_STREAM_MAGIC,
@@ -38,6 +47,7 @@ INPUT_SAMPLE_RATE = 24000
 DEFAULT_AUDIO_PORT = 3333
 MAX_AUDIO_FRAME_BYTES = 64 * 1024
 MIC_CHANNELS = 1
+MIC_RETRY_DELAY_S = 3.0
 ALLOWED_SOUNDS = {"beep", "success", "error"}
 MOVEMENT_COMMANDS = {
     "forward": "w",
@@ -370,9 +380,9 @@ class RealtimeSpeechClient:
     def send_audio(self, pcm16: bytes) -> bool:
         """Append one raw PCM16 frame to the current Realtime input buffer."""
 
-        # The TCP listener starts before the Realtime session is ready. Drop
-        # early frames instead of blocking the ESP32 connection while waiting
-        # for an unrelated cloud connection.
+        # Local capture starts before the Realtime session is ready. Drop early
+        # frames instead of blocking the microphone reader while waiting for
+        # the cloud session.
         if not self.ready.is_set():
             return False
         if self.closed.is_set() or self._ws is None:
@@ -398,7 +408,8 @@ class RealtimeSpeechClient:
 class AudioMonitor:
     """Print evidence that PCM frames and a nonzero mic signal reached UNO Q."""
 
-    def __init__(self) -> None:
+    def __init__(self, source: str = "UNO Q audio") -> None:
+        self.source = source
         self.frames = 0
         self.bytes_received = 0
         self.next_report = 0.0
@@ -441,9 +452,74 @@ class AudioMonitor:
         else:
             levels = "empty frame"
         print(
-            f"UNO Q audio RX: frames={self.frames} "
+            f"{self.source} RX: frames={self.frames} "
             f"bytes={self.bytes_received} {levels}"
         )
+
+
+def serve_local_microphone(
+    realtime: RealtimeSpeechClient | None,
+    stop_event: threading.Event,
+    on_frame: Callable[[bytes], None] | None = None,
+    *,
+    device: str | None = None,
+    sample_rate: int = INPUT_SAMPLE_RATE,
+    frame_ms: int = DEFAULT_FRAME_MS,
+) -> None:
+    """Capture the USB webcam microphone locally on the UNO Q.
+
+    ``plughw:...`` is recommended for ``device`` because many USB webcams
+    advertise 48 kHz while the Realtime input is sent at 24 kHz.  ALSA's plug
+    layer performs that conversion before the PCM frame reaches this process.
+    """
+
+    if sample_rate != INPUT_SAMPLE_RATE:
+        print(
+            "USB microphone capture stopped: Realtime speech input requires "
+            f"{INPUT_SAMPLE_RATE} Hz, got {sample_rate} Hz."
+        )
+        return
+
+    selected_device = configured_device(device)
+    monitor = AudioMonitor("UNO Q USB mic")
+    print(
+        "Using UNO Q USB microphone: "
+        f"device={selected_device} format=PCM16 mono/{sample_rate}Hz "
+        f"frame={frame_ms}ms"
+    )
+
+    while not stop_event.is_set():
+        microphone = AlsaMicrophone(
+            device=selected_device,
+            sample_rate=sample_rate,
+            channels=MIC_CHANNELS,
+            frame_ms=frame_ms,
+        )
+        try:
+            for frame in microphone.frames(stop_event):
+                monitor.report(frame)
+                if on_frame is not None:
+                    on_frame(frame)
+                if realtime is not None:
+                    realtime.send_audio(frame)
+        except (AudioCaptureError, ValueError) as error:
+            if stop_event.is_set():
+                break
+            print(f"USB microphone capture error: {error}")
+            print(
+                f"Retrying USB microphone in {MIC_RETRY_DELAY_S:g}s; "
+                "set UNO_Q_MIC_DEVICE to the webcam's ALSA plughw device."
+            )
+            stop_event.wait(MIC_RETRY_DELAY_S)
+        else:
+            if not stop_event.is_set():
+                print(
+                    "USB microphone capture ended; "
+                    f"retrying in {MIC_RETRY_DELAY_S:g}s."
+                )
+                stop_event.wait(MIC_RETRY_DELAY_S)
+        finally:
+            microphone.stop()
 
 
 def serve_esp32_audio(
@@ -469,8 +545,8 @@ def serve_esp32_audio(
             return
         server.listen(1)
         server.settimeout(1.0)
-        print(f"Listening for ESP32 PCM audio on {host}:{port}.")
-        monitor = AudioMonitor()
+        print(f"Listening for legacy ESP32 PCM audio on {host}:{port}.")
+        monitor = AudioMonitor("ESP32 mic")
 
         while not stop_event.is_set():
             try:
@@ -519,18 +595,52 @@ def serve_esp32_audio(
             print("Waiting for ESP32 audio reconnect.")
 
 
+def configured_input_mode(value: str | None = None) -> str:
+    """Normalize the speech input selector, defaulting to the USB webcam mic."""
+
+    selected = str(
+        value if value is not None else os.getenv("UNO_Q_SPEECH_INPUT", "usb")
+    ).lower().strip()
+    if selected in {"esp32", "tcp", "legacy"}:
+        return "esp32"
+    return "usb"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--input",
+        choices=("usb", "esp32"),
+        default=configured_input_mode(),
+        help="speech input source (default: usb webcam microphone)",
+    )
+    parser.add_argument(
         "--listen-host",
         default=os.getenv("UNO_Q_AUDIO_LISTEN_HOST", "0.0.0.0"),
-        help="TCP bind address (default: 0.0.0.0)",
+        help="legacy ESP32 TCP bind address (default: 0.0.0.0)",
     )
     parser.add_argument(
         "--audio-port",
         type=int,
         default=int(os.getenv("UNO_Q_AUDIO_PORT", str(DEFAULT_AUDIO_PORT))),
-        help="TCP port for ESP32 PCM frames (default: 3333)",
+        help="legacy ESP32 PCM port (default: 3333)",
+    )
+    parser.add_argument(
+        "--mic-device",
+        default=os.getenv("UNO_Q_MIC_DEVICE", "default"),
+        help="ALSA USB microphone device (default: UNO_Q_MIC_DEVICE or default)",
+    )
+    parser.add_argument(
+        "--mic-rate",
+        type=int,
+        default=int(os.getenv("UNO_Q_MIC_RATE", str(INPUT_SAMPLE_RATE))),
+        help=f"USB microphone rate; Realtime requires {INPUT_SAMPLE_RATE} Hz",
+    )
+    parser.add_argument(
+        "--mic-frame-ms",
+        type=int,
+        default=int(os.getenv("UNO_Q_MIC_FRAME_MS", str(DEFAULT_FRAME_MS))),
+        help="USB microphone frame duration in milliseconds (default: 20)",
     )
     return parser.parse_args()
 
@@ -562,8 +672,16 @@ def start_speech_service(
     on_audio_frame: Callable[[bytes], None] | None = None,
     listen_host: str | None = None,
     audio_port: int | None = None,
+    input_mode: str | None = None,
+    mic_device: str | None = None,
+    mic_rate: int | None = None,
+    mic_frame_ms: int | None = None,
 ) -> SpeechService | None:
-    """Start speech recognition in the background for the normal robot app."""
+    """Start speech recognition in the background for the normal robot app.
+
+    Local USB microphone capture is the default.  The ESP32 TCP listener is
+    retained only as an explicit compatibility path for old INMP441 firmware.
+    """
 
     api_key = os.getenv("OPENAI_API_KEY")
     realtime: RealtimeSpeechClient | None = None
@@ -577,19 +695,38 @@ def start_speech_service(
     else:
         print("Speech recognition disabled: OPENAI_API_KEY is not set.")
     stop_event = threading.Event()
-    audio_thread = threading.Thread(
-        target=serve_esp32_audio,
-        args=(
-            realtime,
-            listen_host or os.getenv("UNO_Q_AUDIO_LISTEN_HOST", "0.0.0.0"),
-            audio_port
-            or int(os.getenv("UNO_Q_AUDIO_PORT", str(DEFAULT_AUDIO_PORT))),
-            stop_event,
-            on_audio_frame,
-        ),
-        name="esp32-audio-server",
-        daemon=True,
-    )
+    selected_input = configured_input_mode(input_mode)
+    if selected_input == "esp32":
+        audio_thread = threading.Thread(
+            target=serve_esp32_audio,
+            args=(
+                realtime,
+                listen_host or os.getenv("UNO_Q_AUDIO_LISTEN_HOST", "0.0.0.0"),
+                audio_port
+                or int(os.getenv("UNO_Q_AUDIO_PORT", str(DEFAULT_AUDIO_PORT))),
+                stop_event,
+                on_audio_frame,
+            ),
+            name="esp32-audio-server",
+            daemon=True,
+        )
+    else:
+        audio_thread = threading.Thread(
+            target=serve_local_microphone,
+            args=(realtime, stop_event, on_audio_frame),
+            kwargs={
+                "device": mic_device,
+                "sample_rate": mic_rate
+                if mic_rate is not None
+                else int(os.getenv("UNO_Q_MIC_RATE", str(INPUT_SAMPLE_RATE))),
+                "frame_ms": mic_frame_ms
+                if mic_frame_ms is not None
+                else int(os.getenv("UNO_Q_MIC_FRAME_MS", str(DEFAULT_FRAME_MS))),
+            },
+            name="usb-microphone-capture",
+            daemon=True,
+        )
+        print("Speech input source: USB webcam microphone on UNO Q.")
     if realtime is not None:
         realtime.start()
     audio_thread.start()
@@ -612,19 +749,36 @@ def main() -> None:
     )
     stop_event = threading.Event()
     realtime.start()
-    audio_thread = threading.Thread(
-        target=serve_esp32_audio,
-        args=(realtime, args.listen_host, args.audio_port, stop_event),
-        name="esp32-audio-server",
-        daemon=True,
-    )
+    if args.input == "esp32":
+        audio_thread = threading.Thread(
+            target=serve_esp32_audio,
+            args=(realtime, args.listen_host, args.audio_port, stop_event),
+            name="esp32-audio-server",
+            daemon=True,
+        )
+    else:
+        audio_thread = threading.Thread(
+            target=serve_local_microphone,
+            args=(realtime, stop_event),
+            kwargs={
+                "device": args.mic_device,
+                "sample_rate": args.mic_rate,
+                "frame_ms": args.mic_frame_ms,
+            },
+            name="usb-microphone-capture",
+            daemon=True,
+        )
+        print(
+            "Speech test input: USB webcam microphone "
+            f"device={configured_device(args.mic_device)}."
+        )
     audio_thread.start()
 
     try:
         if not realtime.ready.wait(timeout=20):
             print(
-                "Realtime session is not ready yet; the UNO Q TCP audio server "
-                "will remain available for network testing."
+                "Realtime session is not ready yet; the selected microphone "
+                "capture will remain active for local testing."
             )
         while not stop_event.is_set():
             time.sleep(0.5)

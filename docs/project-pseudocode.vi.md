@@ -1,5 +1,7 @@
 # Tóm tắt code cho hệ thống RoboDog
 
+Bản tiếng Anh: [project-pseudocode.md](project-pseudocode.md)
+
 ## Tổng quan hệ thống
 
 ```text

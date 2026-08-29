@@ -1,5 +1,7 @@
 # RoboDog Compact Pseudocode
 
+Vietnamese version: [project-pseudocode.vi.md](project-pseudocode.vi.md)
+
 This guide summarizes the normal RoboDog vision/control code as compact
 pseudocode. It covers the Python camera/perception loop, Arduino UNO Q Bridge
 sketch, face gate, hand gestures, camera scan, and ball tracking. The separate

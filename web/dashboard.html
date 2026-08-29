@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>RoboDog manual control</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #0b1020;
+      --panel: #151d31;
+      --panel-light: #1d2942;
+      --border: #2d3b5a;
+      --text: #edf3ff;
+      --muted: #a7b4cf;
+      --accent: #56b6ff;
+      --accent-strong: #1687d9;
+      --good: #54d69a;
+      --warning: #ffc857;
+      --danger: #ff6b6b;
+      --shadow: 0 16px 40px rgba(0, 0, 0, 0.24);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(86, 182, 255, 0.13), transparent 34rem),
+        var(--background);
+      color: var(--text);
+      font: 16px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button {
+      min-height: 48px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.7rem 0.9rem;
+      background: var(--panel-light);
+      color: var(--text);
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+      touch-action: manipulation;
+      user-select: none;
+      transition: transform 100ms ease, background 100ms ease, border-color 100ms ease;
+    }
+
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:active:not(:disabled), button.active:not(:disabled) {
+      transform: translateY(1px) scale(0.98);
+      background: #263a5f;
+    }
+    button:disabled { cursor: not-allowed; opacity: 0.42; }
+
+    .app-shell {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      padding: max(1rem, env(safe-area-inset-top)) 1rem 2rem;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    h1, h2, p { margin: 0; }
+    h1 { font-size: clamp(1.5rem, 4vw, 2rem); letter-spacing: -0.03em; }
+    h2 { font-size: 1.05rem; }
+    .subtitle { color: var(--muted); margin-top: 0.25rem; }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 0.45rem;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      min-height: 30px;
+      padding: 0.25rem 0.65rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(29, 41, 66, 0.8);
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .pill.good { color: var(--good); border-color: rgba(84, 214, 154, 0.48); }
+    .pill.warning { color: var(--warning); border-color: rgba(255, 200, 87, 0.48); }
+    .pill.danger { color: var(--danger); border-color: rgba(255, 107, 107, 0.48); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 1rem;
+      background: rgba(21, 29, 49, 0.94);
+      box-shadow: var(--shadow);
+    }
+
+    .camera-card { grid-row: span 2; }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .camera-frame {
+      position: relative;
+      overflow: hidden;
+      min-height: 260px;
+      aspect-ratio: 4 / 3;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: #070b14;
+    }
+
+    .camera-frame img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 260px;
+      object-fit: contain;
+    }
+
+    .camera-hint {
+      position: absolute;
+      inset: auto 0 0;
+      padding: 0.7rem;
+      background: linear-gradient(transparent, rgba(7, 11, 20, 0.94));
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .section-note {
+      margin-top: 0.7rem;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .mode-buttons, .button-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.6rem;
+    }
+
+    .mode-buttons button:first-child { background: var(--accent-strong); border-color: #52baff; }
+    .danger-button { background: #6d2634; border-color: #bd4b5b; }
+
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.55rem;
+      max-width: 390px;
+      margin: 0 auto;
+    }
+
+    .dpad .empty { visibility: hidden; }
+    .dpad button { min-height: 62px; }
+    .dpad .stop { background: #6d2634; border-color: #bd4b5b; }
+
+    .control-group + .control-group { margin-top: 1rem; }
+    .control-group-title {
+      margin-bottom: 0.55rem;
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .button-row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .button-row.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.65rem;
+    }
+
+    .status-item {
+      min-width: 0;
+      padding: 0.65rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(29, 41, 66, 0.55);
+    }
+
+    .status-label {
+      display: block;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .status-value {
+      display: block;
+      overflow: hidden;
+      margin-top: 0.15rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .notice {
+      min-height: 2.7rem;
+      margin-top: 0.8rem;
+      padding: 0.65rem 0.75rem;
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      background: rgba(86, 182, 255, 0.08);
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+    .notice.ok { border-color: var(--good); color: var(--good); }
+    .notice.error { border-color: var(--danger); color: var(--danger); }
+
+    footer {
+      margin-top: 1rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-align: center;
+    }
+
+    @media (max-width: 820px) {
+      .layout { grid-template-columns: 1fr; }
+      .camera-card { grid-row: auto; }
+    }
+
+    @media (max-width: 520px) {
+      .app-shell { padding-inline: 0.7rem; }
+      header { display: block; }
+      .status-strip { justify-content: flex-start; margin-top: 0.8rem; }
+      .card { padding: 0.8rem; border-radius: 14px; }
+      .button-row.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .camera-frame, .camera-frame img { min-height: 200px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header>
+      <div>
+        <h1>RoboDog manual control</h1>
+        <p class="subtitle">UNO Q dashboard · press and hold a movement button</p>
+      </div>
+      <div class="status-strip" aria-label="Connection status">
+        <span id="connection-pill" class="pill">Connecting</span>
+        <span id="mode-pill" class="pill">Automatic</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card camera-card">
+        <div class="card-header">
+          <h2>Camera</h2>
+          <span id="camera-state" class="pill">Waiting</span>
+        </div>
+        <div class="camera-frame">
+          <img src="/camera.mjpg" alt="RoboDog camera feed">
+          <div id="camera-hint" class="camera-hint">Enter dashboard control to activate the feed.</div>
+        </div>
+        <p class="section-note">The camera feed is available on the same private LAN as the UNO Q.</p>
+      </section>
+
+      <section class="card">
+        <div class="card-header"><h2>Control mode</h2></div>
+        <div class="mode-buttons">
+          <button id="manual-button" type="button">Take dashboard control</button>
+          <button id="automatic-button" type="button">Return to automatic</button>
+        </div>
+        <div id="notice" class="notice" role="status" aria-live="polite">Dashboard is connecting to the UNO Q.</div>
+      </section>
+
+      <section class="card">
+        <div class="card-header"><h2>Robot controls</h2></div>
+
+        <div class="control-group">
+          <div class="control-group-title">Movement · hold to continue</div>
+          <div class="dpad">
+            <span class="empty"></span>
+            <button class="hold-control" data-command="forward" type="button">▲<br><small>Forward</small></button>
+            <span class="empty"></span>
+            <button class="hold-control" data-command="turn_left" type="button">↶<br><small>Turn left</small></button>
+            <button class="stop" data-command="stop" type="button">■<br><small>STOP</small></button>
+            <button class="hold-control" data-command="turn_right" type="button">↷<br><small>Turn right</small></button>
+            <button class="hold-control" data-command="crab_left" type="button">←<br><small>Crab left</small></button>
+            <button class="hold-control" data-command="backward" type="button">▼<br><small>Backward</small></button>
+            <button class="hold-control" data-command="crab_right" type="button">→<br><small>Crab right</small></button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <div class="control-group-title">Posture</div>
+          <div class="button-row four">
+            <button data-command="stand" type="button">Stand</button>
+            <button data-command="sit" type="button">Sit</button>
+            <button data-command="prone" type="button">Prone</button>
+            <button data-command="hold" type="button">Hold pose</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <div class="control-group-title">Actions</div>
+          <div class="button-row four">
+            <button data-command="pace" type="button">Pace</button>
+            <button data-command="bounce" type="button">Bounce</button>
+            <button data-command="wave" type="button">Wave</button>
+            <button data-command="jump" type="button">Jump</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <div class="control-group-title">Camera</div>
+          <div class="button-row four">
+            <button data-command="camera_up" type="button">Up</button>
+            <button data-command="camera_down" type="button">Down</button>
+            <button data-command="camera_neutral" type="button">Neutral</button>
+            <button data-command="camera_stop" type="button">Stop scan</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header"><h2>Status</h2></div>
+        <div class="status-grid">
+          <div class="status-item"><span class="status-label">Control</span><span id="status-control" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label">Robot state</span><span id="status-robot" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label">Face</span><span id="status-face" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label">Speech</span><span id="status-speech" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label">Last command</span><span id="status-command" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label">Audio clients</span><span id="status-audio" class="status-value">—</span></div>
+        </div>
+        <p id="status-error" class="section-note">No errors reported.</p>
+      </section>
+    </main>
+
+    <footer>Keyboard shortcuts: W/A/S/D · E/F side-step · Q sit · C prone · Space stop</footer>
+  </div>
+
+  <script>
+    (() => {
+      const state = {
+        status: null,
+        holdButton: null,
+        holdTimer: null,
+        keyboardButton: null,
+      };
+
+      const $ = (id) => document.getElementById(id);
+      const buttons = () => Array.from(document.querySelectorAll("button[data-command]"));
+
+      function showNotice(message, kind = "") {
+        const notice = $("notice");
+        notice.textContent = message;
+        notice.className = `notice ${kind}`;
+      }
+
+      async function postJson(path, payload) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        let result = {};
+        try { result = await response.json(); } catch (_) {}
+        if (!response.ok) {
+          throw new Error(result.message || `Request failed (${response.status})`);
+        }
+        return result;
+      }
+
+      async function sendCommand(command) {
+        try {
+          const result = await postJson("/api/command", { command });
+          showNotice(`Accepted: ${result.command || command}`, "ok");
+          await refreshStatus();
+        } catch (error) {
+          showNotice(error.message, "error");
+        }
+      }
+
+      async function setMode(mode) {
+        try {
+          const result = await postJson("/api/mode", { mode });
+          showNotice(
+            result.mode === "dashboard" ? "Dashboard control is active." : "Automatic control restored.",
+            "ok",
+          );
+          await refreshStatus();
+        } catch (error) {
+          showNotice(error.message, "error");
+          await refreshStatus();
+        }
+      }
+
+      function formatControlMode(value) {
+        return String(value || "unknown")
+          .replace("manual-dashboard", "dashboard")
+          .replace("manual-bluetooth", "bluetooth")
+          .replace("manual-voice", "voice")
+          .replace("manual-unknown", "manual")
+          .replace("-", " ");
+      }
+
+      function formatTime(seconds) {
+        if (!seconds) return "—";
+        return new Date(seconds * 1000).toLocaleTimeString();
+      }
+
+      function renderStatus(data) {
+        state.status = data;
+        const dashboardActive = data.control_mode === "manual-dashboard";
+        const bluetoothActive = data.control_mode === "manual-bluetooth";
+
+        const connection = $("connection-pill");
+        connection.textContent = "Connected";
+        connection.className = "pill good";
+
+        const mode = $("mode-pill");
+        mode.textContent = formatControlMode(data.control_mode);
+        mode.className = `pill ${dashboardActive ? "good" : bluetoothActive ? "warning" : ""}`;
+
+        $("camera-state").textContent = data.media_active ? "Active" : "Waiting";
+        $("camera-state").className = `pill ${data.media_active ? "good" : ""}`;
+        $("camera-hint").textContent = data.media_active
+          ? "Dashboard control is active."
+          : "Enter dashboard control to activate the feed.";
+
+        $("status-control").textContent = formatControlMode(data.control_mode);
+        $("status-robot").textContent = data.robot_state || "—";
+        $("status-face").textContent = data.face_status || "—";
+        $("status-speech").textContent = data.speech_enabled
+          ? (data.realtime_ready ? "Ready" : "Connecting")
+          : "Disabled";
+        $("status-command").textContent = data.last_command
+          ? `${data.last_command} · ${formatTime(data.last_command_at)}`
+          : "—";
+        const clients = data.media_clients || {};
+        $("status-audio").textContent = `${clients.microphone || 0} mic · ${clients.robot_speaker || 0} speaker`;
+        $("status-error").textContent = data.last_error || "No errors reported.";
+        $("status-error").style.color = data.last_error ? "var(--danger)" : "";
+
+        buttons().forEach((button) => {
+          button.disabled = !dashboardActive;
+        });
+        $("manual-button").disabled = dashboardActive || bluetoothActive;
+        $("automatic-button").disabled = data.control_mode === "automatic";
+
+        if (bluetoothActive) {
+          showNotice("Bluetooth currently owns manual control.", "");
+        }
+      }
+
+      async function refreshStatus() {
+        try {
+          const response = await fetch("/api/status", { cache: "no-store" });
+          if (!response.ok) throw new Error(`Status request failed (${response.status})`);
+          renderStatus(await response.json());
+        } catch (error) {
+          const connection = $("connection-pill");
+          connection.textContent = "Offline";
+          connection.className = "pill danger";
+          showNotice(error.message, "error");
+        }
+      }
+
+      function beginHold(button, event) {
+        event.preventDefault();
+        if (state.holdButton) return;
+        state.holdButton = button;
+        button.classList.add("active");
+        if (button.setPointerCapture && event.pointerId !== undefined) {
+          button.setPointerCapture(event.pointerId);
+        }
+        sendCommand(button.dataset.command);
+        state.holdTimer = setInterval(() => sendCommand(button.dataset.command), 400);
+      }
+
+      function endHold(button) {
+        if (state.holdButton !== button) return;
+        clearInterval(state.holdTimer);
+        state.holdTimer = null;
+        state.holdButton.classList.remove("active");
+        state.holdButton = null;
+        sendCommand("stop");
+      }
+
+      function stopEverything() {
+        if (state.holdButton) endHold(state.holdButton);
+        else sendCommand("stop");
+      }
+
+      buttons().forEach((button) => {
+        if (button.classList.contains("hold-control")) {
+          button.addEventListener("pointerdown", (event) => beginHold(button, event));
+          button.addEventListener("pointerup", () => endHold(button));
+          button.addEventListener("pointercancel", () => endHold(button));
+          button.addEventListener("pointerleave", () => endHold(button));
+        } else {
+          button.addEventListener("click", () => {
+            if (button.dataset.command === "stop") stopEverything();
+            else sendCommand(button.dataset.command);
+          });
+        }
+      });
+
+      $("manual-button").addEventListener("click", () => setMode("manual"));
+      $("automatic-button").addEventListener("click", () => setMode("automatic"));
+
+      const keyboardCommands = {
+        w: "forward", a: "turn_left", s: "stop", d: "turn_right",
+        e: "crab_left", f: "crab_right", b: "backward",
+        q: "sit", c: "prone", z: "hold",
+      };
+      window.addEventListener("keydown", (event) => {
+        if (event.target && ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
+        if (event.code === "Space") {
+          event.preventDefault();
+          if (!event.repeat) stopEverything();
+          return;
+        }
+        const command = keyboardCommands[event.key.toLowerCase()];
+        if (!command || event.repeat) return;
+        const button = buttons().find((item) => item.dataset.command === command);
+        if (!button) return;
+        if (button.classList.contains("hold-control")) {
+          state.keyboardButton = button;
+          beginHold(button, event);
+        } else {
+          sendCommand(command);
+        }
+      });
+      window.addEventListener("keyup", (event) => {
+        if (state.keyboardButton && (event.key.toLowerCase() === "w" || event.key.toLowerCase() === "a" ||
+            event.key.toLowerCase() === "s" || event.key.toLowerCase() === "d" ||
+            event.key.toLowerCase() === "b" || event.key.toLowerCase() === "e" ||
+            event.key.toLowerCase() === "f")) {
+          endHold(state.keyboardButton);
+          state.keyboardButton = null;
+        }
+      });
+      window.addEventListener("blur", stopEverything);
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) stopEverything();
+      });
+
+      refreshStatus();
+      setInterval(refreshStatus, 1000);
+    })();
+  </script>
+</body>
+</html>

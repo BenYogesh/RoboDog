@@ -1,5 +1,7 @@
 # Timed Camera Scan Instructions
 
+Vietnamese version: [camera-scan-instructions.vi.md](camera-scan-instructions.vi.md)
+
 This guide covers the camera-lift feature shared by the ESP32 motor controller
 and the Arduino UNO Q vision app. It is written for the 360-degree SG90-style
 continuous-rotation servo connected to ESP32 GPIO 27.

@@ -4,8 +4,9 @@ The UNO Q is the media relay.  The protocol intentionally uses only the
 Python standard library plus OpenCV, which is already required by DogVision:
 
 * ``GET /camera.mjpg`` - multipart MJPEG camera feed.
-* microphone TCP - ``AUD0`` stream header followed by length-prefixed mono
-  PCM16 frames at 24 kHz.
+* microphone TCP - the UNO Q's local USB webcam microphone is published with
+  an ``AUD0`` stream header followed by length-prefixed mono PCM16 frames at
+  24 kHz.
 * controller speaker TCP - the laptop sends an ``AUD0`` header and framed
   PCM16 mono audio at 16 kHz.
 * robot speaker TCP - the ESP32 connects here and receives the controller's
@@ -17,13 +18,15 @@ manual-control surface quiet until the explicit mode transition succeeds.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 import socket
 import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable
+from typing import Any, Callable
 
 import cv2
 
@@ -35,6 +38,12 @@ from media_protocol import (
     stream_header as _stream_header,
 )
 MAX_AUDIO_FRAME_BYTES = 256 * 1024
+DASHBOARD_PATH = Path(__file__).resolve().parent.parent / "web" / "dashboard.html"
+
+
+DashboardCommandHandler = Callable[[str], dict[str, Any]]
+DashboardModeHandler = Callable[[str], dict[str, Any]]
+DashboardStatusProvider = Callable[[], dict[str, Any]]
 
 
 class _CameraHandler(BaseHTTPRequestHandler):
@@ -43,10 +52,93 @@ class _CameraHandler(BaseHTTPRequestHandler):
     server: "_CameraServer"
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
-        if self.path.split("?", 1)[0] != "/camera.mjpg":
-            self.send_error(HTTPStatus.NOT_FOUND, "Use /camera.mjpg")
+        path = self.path.split("?", 1)[0]
+        if path in {"/", "/dashboard", "/dashboard.html"}:
+            self.server.media.serve_dashboard(self)
+            return
+        if path == "/api/status":
+            self.server.media.serve_status(self)
+            return
+        if path == "/camera.mjpg":
+            self.server.media.serve_camera(self)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Use / or /camera.mjpg")
+
+    def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        path = self.path.split("?", 1)[0]
+        if path not in {"/api/command", "/api/mode"}:
+            self.send_error(HTTPStatus.NOT_FOUND, "Unknown dashboard endpoint")
             return
 
+        try:
+            payload = self._read_json()
+        except ValueError as error:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"status": "error", "message": str(error)},
+            )
+            return
+
+        value = payload.get("command" if path == "/api/command" else "mode")
+        if not isinstance(value, str):
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"status": "error", "message": "Expected a string command or mode"},
+            )
+            return
+
+        result = (
+            self.server.media.handle_dashboard_command(value)
+            if path == "/api/command"
+            else self.server.media.handle_dashboard_mode(value)
+        )
+        status = result.get("status")
+        http_status = (
+            HTTPStatus.OK
+            if status in {"accepted", "ok"}
+            else HTTPStatus.CONFLICT
+            if status == "rejected"
+            else HTTPStatus.INTERNAL_SERVER_ERROR
+        )
+        self._send_json(http_status, result)
+
+    def _read_json(self) -> dict[str, Any]:
+        raw_length = self.headers.get("Content-Length")
+        try:
+            length = int(raw_length or "0")
+        except ValueError as error:
+            raise ValueError("Invalid Content-Length") from error
+        if length <= 0 or length > 16 * 1024:
+            raise ValueError("Request body must be between 1 and 16384 bytes")
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            raise ValueError("Incomplete request body")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("Request body must be valid JSON") from error
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object")
+        return payload
+
+    def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_bytes(self, status: HTTPStatus, content_type: str, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_camera_stream(self) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Pragma", "no-cache")
@@ -118,6 +210,93 @@ class ManualMediaServer:
         self._servers: list[socket.socket] = []
         self._threads: list[threading.Thread] = []
         self._camera_server: _CameraServer | None = None
+        self._dashboard_command_handler: DashboardCommandHandler | None = None
+        self._dashboard_mode_handler: DashboardModeHandler | None = None
+        self._dashboard_status_provider: DashboardStatusProvider | None = None
+        self._dashboard_html = self._load_dashboard_html()
+
+    @staticmethod
+    def _load_dashboard_html() -> bytes | None:
+        try:
+            return DASHBOARD_PATH.read_bytes()
+        except OSError as error:
+            print(f"Dashboard unavailable: could not read {DASHBOARD_PATH}: {error}")
+            return None
+
+    def configure_dashboard(
+        self,
+        *,
+        command_handler: DashboardCommandHandler,
+        mode_handler: DashboardModeHandler,
+        status_provider: DashboardStatusProvider,
+    ) -> None:
+        """Attach robot callbacks after the media server has been constructed."""
+        self._dashboard_command_handler = command_handler
+        self._dashboard_mode_handler = mode_handler
+        self._dashboard_status_provider = status_provider
+
+    def serve_dashboard(self, handler: _CameraHandler) -> None:
+        if self._dashboard_html is None:
+            handler.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Dashboard file unavailable")
+            return
+        handler._send_bytes(
+            HTTPStatus.OK,
+            "text/html; charset=utf-8",
+            self._dashboard_html,
+        )
+
+    def serve_status(self, handler: _CameraHandler) -> None:
+        status: dict[str, Any] = {
+            "media_active": self.active,
+            "media": {
+                "camera": f"/camera.mjpg",
+                "audio_port": self.audio_port,
+                "speaker_port": self.speaker_port,
+                "robot_speaker_port": self.robot_speaker_port,
+            },
+        }
+        if self._dashboard_status_provider is not None:
+            try:
+                status.update(self._dashboard_status_provider())
+            except Exception as error:  # Keep the status endpoint available.
+                status.update(
+                    {
+                        "status": "error",
+                        "status_error": str(error),
+                    }
+                )
+        with self._clients_lock:
+            status["media_clients"] = {
+                "microphone": len(self._audio_clients),
+                "robot_speaker": len(self._robot_speaker_clients),
+            }
+        body = json.dumps(status, ensure_ascii=False).encode("utf-8")
+        handler._send_bytes(
+            HTTPStatus.OK,
+            "application/json; charset=utf-8",
+            body,
+        )
+
+    def serve_camera(self, handler: _CameraHandler) -> None:
+        handler._serve_camera_stream()
+
+    def handle_dashboard_command(self, command: str) -> dict[str, Any]:
+        if self._dashboard_command_handler is None:
+            return {"status": "error", "message": "Dashboard control is not initialized"}
+        try:
+            return self._dashboard_command_handler(command)
+        except Exception as error:
+            print(f"Dashboard command failed: {error}")
+            return {"status": "error", "message": str(error)}
+
+    def handle_dashboard_mode(self, mode: str) -> dict[str, Any]:
+        if self._dashboard_mode_handler is None:
+            return {"status": "error", "message": "Dashboard control is not initialized"}
+        try:
+            return self._dashboard_mode_handler(mode)
+        except Exception as error:
+            print(f"Dashboard mode change failed: {error}")
+            return {"status": "error", "message": str(error)}
 
     @property
     def active(self) -> bool:

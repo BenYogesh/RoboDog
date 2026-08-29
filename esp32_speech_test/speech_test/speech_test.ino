@@ -18,11 +18,11 @@
 #endif
 
 #ifndef TEST_WIFI_SSID
-#define TEST_WIFI_SSID "CHANGE_ME"
+#define TEST_WIFI_SSID "DESKTOP-A8UOSGQ 4848"
 #endif
 
 #ifndef TEST_WIFI_PASSWORD
-#define TEST_WIFI_PASSWORD "CHANGE_ME"
+#define TEST_WIFI_PASSWORD "9r3[699Z"
 #endif
 
 #ifndef TEST_UNO_Q_HOST
@@ -38,14 +38,14 @@
 #endif
 
 // Change these if they conflict with the existing ESP32 gait/servo wiring.
-constexpr int MIC_BCLK_PIN = 26;
-constexpr int MIC_WS_PIN = 25;
-constexpr int MIC_SD_PIN = 33;
+constexpr int MIC_BCLK_PIN = 14;
+constexpr int MIC_WS_PIN = 13;
+constexpr int MIC_SD_PIN = 15;
 constexpr int MIC_LR_PIN = 4; // LOW selects the left I2S slot.
 
-constexpr int SPEAKER_BCLK_PIN = 14;
-constexpr int SPEAKER_WS_PIN = 13;
-constexpr int SPEAKER_DOUT_PIN = 32;
+constexpr int SPEAKER_BCLK_PIN = 25;
+constexpr int SPEAKER_WS_PIN = 26;
+constexpr int SPEAKER_DOUT_PIN = 23;
 
 // Existing project wiring: UNO Q D1/TX -> ESP32 GPIO16 (RX2),
 // UNO Q D0/RX <- ESP32 GPIO17 (TX2).
