@@ -111,15 +111,15 @@ class AlsaMicrophone:
         return [
             _arecord_path(),
             "--quiet",
-            "--device",
+            "-D",
             self.device,
-            "--type",
+            "-t",
             "raw",
-            "--format",
+            "-f",
             "S16_LE",
-            "--channels",
+            "-c",
             str(self.channels),
-            "--rate",
+            "-r",
             str(self.sample_rate),
         ]
 
