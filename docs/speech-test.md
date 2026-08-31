@@ -54,10 +54,25 @@ microphone is converted to 24 kHz mono by ALSA before it is sent to Realtime.
 2. Confirm the MAX98357A I2S pins do not collide with the current ESP32
    servo wiring.
 
-On the UNO Q, provide the API key only in the process environment:
+On the UNO Q, provide the API key only in the process environment or in the
+board-local `.secrets.env` file. The project checks the environment first and
+then checks `.secrets.env` in the app root and `python/` directory. The file is
+ignored by Git so it must be created again on a board after pulling the project:
 
 ```sh
 export OPENAI_API_KEY='your-key-here'
+```
+
+If App Lab still cannot see a shell export, create the file in the app root:
+
+```text
+OPENAI_API_KEY=your-key-here
+```
+
+Restrict the file to the Arduino user:
+
+```sh
+chmod 600 .secrets.env
 ```
 
 Do not put that value in this repository.

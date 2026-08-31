@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 python/debug_vision_*.jpg
 esp32_speech_test/**/secrets.h
+.secrets.env
+python/.secrets.env

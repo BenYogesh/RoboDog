@@ -40,6 +40,10 @@ from media_protocol import (
     FRAME_LENGTH,
     read_exact,
 )
+from runtime_secrets import load_runtime_secrets
+
+
+load_runtime_secrets()
 
 
 MODEL = "gpt-realtime-2.1-mini"
