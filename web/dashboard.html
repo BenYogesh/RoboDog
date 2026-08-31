@@ -3,23 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#111827">
-  <title>RoboDog manual control</title>
+  <meta name="theme-color" content="#e8741a">
+  <title id="page-title">RoboDog manual control</title>
   <style>
     :root {
       color-scheme: dark;
-      --background: #0b1020;
-      --panel: #151d31;
-      --panel-light: #1d2942;
-      --border: #2d3b5a;
-      --text: #edf3ff;
-      --muted: #a7b4cf;
-      --accent: #56b6ff;
-      --accent-strong: #1687d9;
+      --background: #130b06;
+      --panel: #24150c;
+      --panel-light: #382014;
+      --border: #704022;
+      --text: #fff4e8;
+      --muted: #d3b69e;
+      --accent: #ff9c3d;
+      --accent-strong: #e8741a;
       --good: #54d69a;
       --warning: #ffc857;
       --danger: #ff6b6b;
-      --shadow: 0 16px 40px rgba(0, 0, 0, 0.24);
+      --shadow: 0 16px 40px rgba(76, 30, 0, 0.35);
     }
 
     * { box-sizing: border-box; }
@@ -28,7 +28,7 @@
       margin: 0;
       min-height: 100vh;
       background:
-        radial-gradient(circle at 15% 0%, rgba(86, 182, 255, 0.13), transparent 34rem),
+        radial-gradient(circle at 15% 0%, rgba(255, 156, 61, 0.18), transparent 34rem),
         var(--background);
       color: var(--text);
       font: 16px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -52,7 +52,7 @@
     button:hover:not(:disabled) { border-color: var(--accent); }
     button:active:not(:disabled), button.active:not(:disabled) {
       transform: translateY(1px) scale(0.98);
-      background: #263a5f;
+      background: #5c2d10;
     }
     button:disabled { cursor: not-allowed; opacity: 0.42; }
 
@@ -80,6 +80,26 @@
       flex-wrap: wrap;
       justify-content: flex-end;
       gap: 0.45rem;
+    }
+
+    .header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.55rem;
+    }
+
+    .language-button {
+      min-height: 38px;
+      padding: 0.45rem 0.7rem;
+      background: transparent;
+      color: var(--accent);
+      font-size: 0.8rem;
+    }
+
+    .language-button:hover:not(:disabled) {
+      background: rgba(255, 156, 61, 0.12);
     }
 
     .pill {
@@ -113,7 +133,7 @@
       border: 1px solid var(--border);
       border-radius: 18px;
       padding: 1rem;
-      background: rgba(21, 29, 49, 0.94);
+      background: rgba(36, 21, 12, 0.96);
       box-shadow: var(--shadow);
     }
 
@@ -133,7 +153,7 @@
       aspect-ratio: 4 / 3;
       border: 1px solid var(--border);
       border-radius: 14px;
-      background: #070b14;
+      background: #0c0805;
     }
 
     .camera-frame img {
@@ -148,7 +168,7 @@
       position: absolute;
       inset: auto 0 0;
       padding: 0.7rem;
-      background: linear-gradient(transparent, rgba(7, 11, 20, 0.94));
+       background: linear-gradient(transparent, rgba(12, 8, 5, 0.94));
       color: var(--muted);
       font-size: 0.85rem;
     }
@@ -165,7 +185,7 @@
       gap: 0.6rem;
     }
 
-    .mode-buttons button:first-child { background: var(--accent-strong); border-color: #52baff; }
+    .mode-buttons button:first-child { background: var(--accent-strong); border-color: #ffbd73; }
     .danger-button { background: #6d2634; border-color: #bd4b5b; }
 
     .dpad {
@@ -204,7 +224,7 @@
       padding: 0.65rem 0.7rem;
       border: 1px solid var(--border);
       border-radius: 10px;
-      background: rgba(29, 41, 66, 0.55);
+      background: rgba(56, 32, 20, 0.55);
     }
 
     .status-label {
@@ -230,7 +250,7 @@
       padding: 0.65rem 0.75rem;
       border-left: 3px solid var(--accent);
       border-radius: 8px;
-      background: rgba(86, 182, 255, 0.08);
+      background: rgba(255, 156, 61, 0.1);
       color: var(--muted);
       font-size: 0.86rem;
     }
@@ -263,114 +283,318 @@
   <div class="app-shell">
     <header>
       <div>
-        <h1>RoboDog manual control</h1>
-        <p class="subtitle">UNO Q dashboard · press and hold a movement button</p>
+        <h1 data-i18n="title">RoboDog manual control</h1>
+        <p class="subtitle" data-i18n="subtitle">UNO Q dashboard · press and hold a movement button</p>
       </div>
-      <div class="status-strip" aria-label="Connection status">
-        <span id="connection-pill" class="pill">Connecting</span>
-        <span id="mode-pill" class="pill">Automatic</span>
+      <div class="header-actions">
+        <button id="language-button" class="language-button" type="button">Tiếng Việt</button>
+        <div id="connection-strip" class="status-strip" aria-label="Connection status">
+          <span id="connection-pill" class="pill" data-i18n="connecting">Connecting</span>
+          <span id="mode-pill" class="pill" data-i18n="automatic">Automatic</span>
+        </div>
       </div>
     </header>
 
     <main class="layout">
       <section class="card camera-card">
         <div class="card-header">
-          <h2>Camera</h2>
-          <span id="camera-state" class="pill">Waiting</span>
+          <h2 data-i18n="camera">Camera</h2>
+          <span id="camera-state" class="pill" data-i18n="waiting">Waiting</span>
         </div>
         <div class="camera-frame">
-          <img src="/camera.mjpg" alt="RoboDog camera feed">
-          <div id="camera-hint" class="camera-hint">Enter dashboard control to activate the feed.</div>
+          <img id="camera-image" src="/camera.mjpg" alt="RoboDog camera feed">
+          <div id="camera-hint" class="camera-hint" data-i18n="cameraLiveHint">Live camera feed.</div>
         </div>
-        <p class="section-note">The camera feed is available on the same private LAN as the UNO Q.</p>
+        <p class="section-note" data-i18n="cameraNote">The live camera feed is available on the same private LAN as the UNO Q.</p>
       </section>
 
       <section class="card">
-        <div class="card-header"><h2>Control mode</h2></div>
+        <div class="card-header"><h2 data-i18n="controlMode">Control mode</h2></div>
         <div class="mode-buttons">
-          <button id="manual-button" type="button">Take dashboard control</button>
-          <button id="automatic-button" type="button">Return to automatic</button>
+          <button id="manual-button" type="button" data-i18n="takeControl">Take dashboard control</button>
+          <button id="automatic-button" type="button" data-i18n="returnAutomatic">Return to automatic</button>
         </div>
-        <div id="notice" class="notice" role="status" aria-live="polite">Dashboard is connecting to the UNO Q.</div>
+        <div id="notice" class="notice" role="status" aria-live="polite" data-i18n="connectingNotice">Dashboard is connecting to the UNO Q.</div>
       </section>
 
       <section class="card">
-        <div class="card-header"><h2>Robot controls</h2></div>
+        <div class="card-header"><h2 data-i18n="robotControls">Robot controls</h2></div>
 
         <div class="control-group">
-          <div class="control-group-title">Movement · hold to continue</div>
+          <div class="control-group-title" data-i18n="movementHold">Movement · hold to continue</div>
           <div class="dpad">
             <span class="empty"></span>
-            <button class="hold-control" data-command="forward" type="button">▲<br><small>Forward</small></button>
+            <button class="hold-control" data-command="forward" type="button">▲<br><small data-i18n="forward">Forward</small></button>
             <span class="empty"></span>
-            <button class="hold-control" data-command="turn_left" type="button">↶<br><small>Turn left</small></button>
-            <button class="stop" data-command="stop" type="button">■<br><small>STOP</small></button>
-            <button class="hold-control" data-command="turn_right" type="button">↷<br><small>Turn right</small></button>
-            <button class="hold-control" data-command="crab_left" type="button">←<br><small>Crab left</small></button>
-            <button class="hold-control" data-command="backward" type="button">▼<br><small>Backward</small></button>
-            <button class="hold-control" data-command="crab_right" type="button">→<br><small>Crab right</small></button>
+            <button class="hold-control" data-command="turn_left" type="button">↶<br><small data-i18n="turnLeft">Turn left</small></button>
+            <button class="stop" data-command="stop" type="button">■<br><small data-i18n="stop">STOP</small></button>
+            <button class="hold-control" data-command="turn_right" type="button">↷<br><small data-i18n="turnRight">Turn right</small></button>
+            <button class="hold-control" data-command="crab_left" type="button">←<br><small data-i18n="crabLeft">Crab left</small></button>
+            <button class="hold-control" data-command="backward" type="button">▼<br><small data-i18n="backward">Backward</small></button>
+            <button class="hold-control" data-command="crab_right" type="button">→<br><small data-i18n="crabRight">Crab right</small></button>
           </div>
         </div>
 
         <div class="control-group">
-          <div class="control-group-title">Posture</div>
+          <div class="control-group-title" data-i18n="posture">Posture</div>
           <div class="button-row four">
-            <button data-command="stand" type="button">Stand</button>
-            <button data-command="sit" type="button">Sit</button>
-            <button data-command="prone" type="button">Prone</button>
-            <button data-command="hold" type="button">Hold pose</button>
+            <button data-command="stand" type="button" data-i18n="stand">Stand</button>
+            <button data-command="sit" type="button" data-i18n="sit">Sit</button>
+            <button data-command="prone" type="button" data-i18n="prone">Prone</button>
+            <button data-command="hold" type="button" data-i18n="holdPose">Hold pose</button>
           </div>
         </div>
 
         <div class="control-group">
-          <div class="control-group-title">Actions</div>
+          <div class="control-group-title" data-i18n="actions">Actions</div>
           <div class="button-row four">
-            <button data-command="pace" type="button">Pace</button>
-            <button data-command="bounce" type="button">Bounce</button>
-            <button data-command="wave" type="button">Wave</button>
-            <button data-command="jump" type="button">Jump</button>
+            <button data-command="pace" type="button" data-i18n="pace">Pace</button>
+            <button data-command="bounce" type="button" data-i18n="bounce">Bounce</button>
+            <button data-command="wave" type="button" data-i18n="wave">Wave</button>
+            <button data-command="jump" type="button" data-i18n="jump">Jump</button>
           </div>
         </div>
 
         <div class="control-group">
-          <div class="control-group-title">Camera</div>
+          <div class="control-group-title" data-i18n="camera">Camera</div>
           <div class="button-row four">
-            <button data-command="camera_up" type="button">Up</button>
-            <button data-command="camera_down" type="button">Down</button>
-            <button data-command="camera_neutral" type="button">Neutral</button>
-            <button data-command="camera_stop" type="button">Stop scan</button>
+            <button data-command="camera_up" type="button" data-i18n="cameraUp">Up</button>
+            <button data-command="camera_down" type="button" data-i18n="cameraDown">Down</button>
+            <button data-command="camera_neutral" type="button" data-i18n="neutral">Neutral</button>
+            <button data-command="camera_stop" type="button" data-i18n="stopScan">Stop scan</button>
           </div>
         </div>
       </section>
 
       <section class="card">
-        <div class="card-header"><h2>Status</h2></div>
+        <div class="card-header"><h2 data-i18n="status">Status</h2></div>
         <div class="status-grid">
-          <div class="status-item"><span class="status-label">Control</span><span id="status-control" class="status-value">—</span></div>
-          <div class="status-item"><span class="status-label">Robot state</span><span id="status-robot" class="status-value">—</span></div>
-          <div class="status-item"><span class="status-label">Face</span><span id="status-face" class="status-value">—</span></div>
-          <div class="status-item"><span class="status-label">Speech</span><span id="status-speech" class="status-value">—</span></div>
-          <div class="status-item"><span class="status-label">Last command</span><span id="status-command" class="status-value">—</span></div>
-          <div class="status-item"><span class="status-label">Audio clients</span><span id="status-audio" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="control">Control</span><span id="status-control" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="robotState">Robot state</span><span id="status-robot" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="face">Face</span><span id="status-face" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="speech">Speech</span><span id="status-speech" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="lastCommand">Last command</span><span id="status-command" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="audioClients">Audio clients</span><span id="status-audio" class="status-value">—</span></div>
         </div>
-        <p id="status-error" class="section-note">No errors reported.</p>
+        <p id="status-error" class="section-note" data-i18n="noErrors">No errors reported.</p>
       </section>
     </main>
 
-    <footer>Keyboard shortcuts: W/A/S/D · E/F side-step · Q sit · C prone · Space stop</footer>
+    <footer data-i18n="footer">Keyboard shortcuts: W/A/S/D · E/F side-step · Q sit · C prone · Space stop</footer>
   </div>
 
   <script>
     (() => {
+      const translations = {
+        en: {
+          title: "RoboDog manual control",
+          subtitle: "UNO Q dashboard · press and hold a movement button",
+          switchLanguage: "Tiếng Việt",
+          switchLanguageAria: "Switch to Vietnamese",
+          connectionStatus: "Connection status",
+          connecting: "Connecting",
+          connected: "Connected",
+          offline: "Offline",
+          inUse: "In use",
+          automatic: "Automatic",
+          dashboard: "Dashboard",
+          bluetooth: "Bluetooth",
+          voice: "Voice",
+          manual: "Manual",
+          unknown: "Unknown",
+          camera: "Camera",
+          live: "Live",
+          waiting: "Waiting",
+          cameraLiveHint: "Live camera feed.",
+          cameraWaitingHint: "Waiting for camera frames.",
+          cameraAlt: "RoboDog camera feed",
+          cameraNote: "The live camera feed is available on the same private LAN as the UNO Q.",
+          controlMode: "Control mode",
+          takeControl: "Take dashboard control",
+          returnAutomatic: "Return to automatic",
+          connectingNotice: "Dashboard is connecting to the UNO Q.",
+          dashboardControlActive: "Dashboard control is active.",
+          automaticRestored: "Automatic control restored.",
+          dashboardBusy: "Dashboard is currently in use by another device.",
+          bluetoothOwns: "Bluetooth currently owns manual control.",
+          acceptedCommand: "Accepted: {command}",
+          requestFailed: "Request failed ({status})",
+          ready: "Ready",
+          disabled: "Disabled",
+          robotControls: "Robot controls",
+          movementHold: "Movement · hold to continue",
+          forward: "Forward",
+          turnLeft: "Turn left",
+          stop: "STOP",
+          turnRight: "Turn right",
+          crabLeft: "Crab left",
+          backward: "Backward",
+          crabRight: "Crab right",
+          posture: "Posture",
+          stand: "Stand",
+          sit: "Sit",
+          prone: "Prone",
+          holdPose: "Hold pose",
+          actions: "Actions",
+          pace: "Pace",
+          bounce: "Bounce",
+          wave: "Wave",
+          jump: "Jump",
+          cameraUp: "Up",
+          cameraDown: "Down",
+          neutral: "Neutral",
+          stopScan: "Stop scan",
+          status: "Status",
+          control: "Control",
+          robotState: "Robot state",
+          face: "Face",
+          speech: "Speech",
+          lastCommand: "Last command",
+          audioClients: "Audio clients",
+          audioClientValue: "{mic} mic · {speaker} speaker",
+          noErrors: "No errors reported.",
+          footer: "Keyboard shortcuts: W/A/S/D · E/F side-step · Q sit · C prone · Space stop",
+        },
+        vi: {
+          title: "Điều khiển thủ công RoboDog",
+          subtitle: "Bảng điều khiển UNO Q · nhấn giữ nút di chuyển",
+          switchLanguage: "English",
+          switchLanguageAria: "Chuyển sang tiếng Anh",
+          connectionStatus: "Trạng thái kết nối",
+          connecting: "Đang kết nối",
+          connected: "Đã kết nối",
+          offline: "Ngoại tuyến",
+          inUse: "Đang được sử dụng",
+          automatic: "Tự động",
+          dashboard: "Bảng điều khiển",
+          bluetooth: "Bluetooth",
+          voice: "Giọng nói",
+          manual: "Thủ công",
+          unknown: "Không rõ",
+          camera: "Camera",
+          live: "Trực tiếp",
+          waiting: "Đang chờ",
+          cameraLiveHint: "Luồng camera đang trực tiếp.",
+          cameraWaitingHint: "Đang chờ khung hình camera.",
+          cameraAlt: "Luồng camera RoboDog",
+          cameraNote: "Luồng camera trực tiếp khả dụng trên cùng mạng riêng với UNO Q.",
+          controlMode: "Chế độ điều khiển",
+          takeControl: "Nhận quyền điều khiển",
+          returnAutomatic: "Trở về tự động",
+          connectingNotice: "Bảng điều khiển đang kết nối với UNO Q.",
+          dashboardControlActive: "Đã kích hoạt điều khiển bằng bảng.",
+          automaticRestored: "Đã khôi phục điều khiển tự động.",
+          dashboardBusy: "Bảng điều khiển đang được thiết bị khác sử dụng.",
+          bluetoothOwns: "Bluetooth đang giữ quyền điều khiển thủ công.",
+          acceptedCommand: "Đã nhận: {command}",
+          requestFailed: "Yêu cầu thất bại ({status})",
+          ready: "Sẵn sàng",
+          disabled: "Đã tắt",
+          robotControls: "Điều khiển robot",
+          movementHold: "Di chuyển · nhấn giữ để tiếp tục",
+          forward: "Tiến",
+          turnLeft: "Quay trái",
+          stop: "DỪNG",
+          turnRight: "Quay phải",
+          crabLeft: "Ngang trái",
+          backward: "Lùi",
+          crabRight: "Ngang phải",
+          posture: "Tư thế",
+          stand: "Đứng",
+          sit: "Ngồi",
+          prone: "Nằm",
+          holdPose: "Giữ tư thế",
+          actions: "Hành động",
+          pace: "Đi tuần",
+          bounce: "Nhún",
+          wave: "Vẫy",
+          jump: "Nhảy",
+          cameraUp: "Lên",
+          cameraDown: "Xuống",
+          neutral: "Trung tâm",
+          stopScan: "Dừng quét",
+          status: "Trạng thái",
+          control: "Điều khiển",
+          robotState: "Trạng thái robot",
+          face: "Khuôn mặt",
+          speech: "Giọng nói",
+          lastCommand: "Lệnh cuối",
+          audioClients: "Thiết bị âm thanh",
+          audioClientValue: "{mic} mic · {speaker} loa",
+          noErrors: "Không có lỗi.",
+          footer: "Phím tắt: W/A/S/D · E/F bước ngang · Q ngồi · C nằm · Space dừng",
+        },
+      };
+
       const state = {
         status: null,
         holdButton: null,
         holdTimer: null,
         keyboardButton: null,
+        language: null,
+        released: false,
       };
 
       const $ = (id) => document.getElementById(id);
       const buttons = () => Array.from(document.querySelectorAll("button[data-command]"));
+
+      const commandTranslationKeys = {
+        forward: "forward",
+        backward: "backward",
+        turn_left: "turnLeft",
+        turn_right: "turnRight",
+        crab_left: "crabLeft",
+        crab_right: "crabRight",
+        stop: "stop",
+        stand: "stand",
+        sit: "sit",
+        prone: "prone",
+        hold: "holdPose",
+        pace: "pace",
+        bounce: "bounce",
+        wave: "wave",
+        jump: "jump",
+        camera_up: "cameraUp",
+        camera_down: "cameraDown",
+        camera_neutral: "neutral",
+        camera_stop: "stopScan",
+      };
+
+      function initialLanguage() {
+        try {
+          const saved = localStorage.getItem("robodog-language");
+          if (saved === "en" || saved === "vi") return saved;
+        } catch (_) {}
+        return String(navigator.language || "").toLowerCase().startsWith("vi") ? "vi" : "en";
+      }
+
+      function t(key, replacements = {}) {
+        const language = translations[state.language] || translations.en;
+        let value = language[key] || translations.en[key] || key;
+        Object.entries(replacements).forEach(([name, replacement]) => {
+          value = value.replace(`{${name}}`, String(replacement));
+        });
+        return value;
+      }
+
+      function commandLabel(command) {
+        const key = commandTranslationKeys[String(command || "").toLowerCase()];
+        return key ? t(key) : String(command || "—");
+      }
+
+      function applyLanguage() {
+        document.documentElement.lang = state.language;
+        document.title = t("title");
+        document.querySelectorAll("[data-i18n]").forEach((element) => {
+          element.textContent = t(element.dataset.i18n);
+        });
+        $("language-button").textContent = t("switchLanguage");
+        $("language-button").setAttribute("aria-label", t("switchLanguageAria"));
+        $("connection-strip").setAttribute("aria-label", t("connectionStatus"));
+        $("camera-image").alt = t("cameraAlt");
+        if (state.status) renderStatus(state.status);
+        else showNotice(t("connectingNotice"));
+      }
 
       function showNotice(message, kind = "") {
         const notice = $("notice");
@@ -387,7 +611,11 @@
         let result = {};
         try { result = await response.json(); } catch (_) {}
         if (!response.ok) {
-          throw new Error(result.message || `Request failed (${response.status})`);
+          const error = new Error(
+            result.code ? t(result.code) : result.message || t("requestFailed", { status: response.status }),
+          );
+          error.code = result.code;
+          throw error;
         }
         return result;
       }
@@ -395,7 +623,7 @@
       async function sendCommand(command) {
         try {
           const result = await postJson("/api/command", { command });
-          showNotice(`Accepted: ${result.command || command}`, "ok");
+          showNotice(t("acceptedCommand", { command: commandLabel(result.command || command) }), "ok");
           await refreshStatus();
         } catch (error) {
           showNotice(error.message, "error");
@@ -406,7 +634,7 @@
         try {
           const result = await postJson("/api/mode", { mode });
           showNotice(
-            result.mode === "dashboard" ? "Dashboard control is active." : "Automatic control restored.",
+            result.mode === "dashboard" ? t("dashboardControlActive") : t("automaticRestored"),
             "ok",
           );
           await refreshStatus();
@@ -417,17 +645,19 @@
       }
 
       function formatControlMode(value) {
-        return String(value || "unknown")
-          .replace("manual-dashboard", "dashboard")
-          .replace("manual-bluetooth", "bluetooth")
-          .replace("manual-voice", "voice")
-          .replace("manual-unknown", "manual")
-          .replace("-", " ");
+        const modeKeys = {
+          automatic: "automatic",
+          "manual-dashboard": "dashboard",
+          "manual-bluetooth": "bluetooth",
+          "manual-voice": "voice",
+          "manual-unknown": "manual",
+        };
+        return t(modeKeys[String(value || "unknown")] || "unknown");
       }
 
       function formatTime(seconds) {
         if (!seconds) return "—";
-        return new Date(seconds * 1000).toLocaleTimeString();
+        return new Date(seconds * 1000).toLocaleTimeString(state.language === "vi" ? "vi-VN" : "en-US");
       }
 
       function renderStatus(data) {
@@ -436,31 +666,33 @@
         const bluetoothActive = data.control_mode === "manual-bluetooth";
 
         const connection = $("connection-pill");
-        connection.textContent = "Connected";
+        connection.textContent = t("connected");
         connection.className = "pill good";
 
         const mode = $("mode-pill");
         mode.textContent = formatControlMode(data.control_mode);
         mode.className = `pill ${dashboardActive ? "good" : bluetoothActive ? "warning" : ""}`;
 
-        $("camera-state").textContent = data.media_active ? "Active" : "Waiting";
-        $("camera-state").className = `pill ${data.media_active ? "good" : ""}`;
-        $("camera-hint").textContent = data.media_active
-          ? "Dashboard control is active."
-          : "Enter dashboard control to activate the feed.";
+        const cameraLive = data.camera_live !== false;
+        $("camera-state").textContent = cameraLive ? t("live") : t("waiting");
+        $("camera-state").className = `pill ${cameraLive ? "good" : ""}`;
+        $("camera-hint").textContent = cameraLive ? t("cameraLiveHint") : t("cameraWaitingHint");
 
         $("status-control").textContent = formatControlMode(data.control_mode);
         $("status-robot").textContent = data.robot_state || "—";
         $("status-face").textContent = data.face_status || "—";
         $("status-speech").textContent = data.speech_enabled
-          ? (data.realtime_ready ? "Ready" : "Connecting")
-          : "Disabled";
+          ? (data.realtime_ready ? t("ready") : t("connecting"))
+          : t("disabled");
         $("status-command").textContent = data.last_command
-          ? `${data.last_command} · ${formatTime(data.last_command_at)}`
+          ? `${commandLabel(data.last_command)} · ${formatTime(data.last_command_at)}`
           : "—";
         const clients = data.media_clients || {};
-        $("status-audio").textContent = `${clients.microphone || 0} mic · ${clients.robot_speaker || 0} speaker`;
-        $("status-error").textContent = data.last_error || "No errors reported.";
+        $("status-audio").textContent = t("audioClientValue", {
+          mic: clients.microphone || 0,
+          speaker: clients.robot_speaker || 0,
+        });
+        $("status-error").textContent = data.last_error || t("noErrors");
         $("status-error").style.color = data.last_error ? "var(--danger)" : "";
 
         buttons().forEach((button) => {
@@ -470,26 +702,35 @@
         $("automatic-button").disabled = data.control_mode === "automatic";
 
         if (bluetoothActive) {
-          showNotice("Bluetooth currently owns manual control.", "");
+          showNotice(t("bluetoothOwns"), "");
         }
       }
 
       async function refreshStatus() {
         try {
           const response = await fetch("/api/status", { cache: "no-store" });
-          if (!response.ok) throw new Error(`Status request failed (${response.status})`);
-          renderStatus(await response.json());
+          let result = {};
+          try { result = await response.json(); } catch (_) {}
+          if (!response.ok) {
+            const error = new Error(
+              result.code ? t(result.code) : result.message || t("requestFailed", { status: response.status }),
+            );
+            error.code = result.code;
+            throw error;
+          }
+          renderStatus(result);
         } catch (error) {
           const connection = $("connection-pill");
-          connection.textContent = "Offline";
-          connection.className = "pill danger";
+          const busy = error.code === "dashboard_busy";
+          connection.textContent = busy ? t("inUse") : t("offline");
+          connection.className = `pill ${busy ? "warning" : "danger"}`;
           showNotice(error.message, "error");
         }
       }
 
       function beginHold(button, event) {
         event.preventDefault();
-        if (state.holdButton) return;
+        if (button.disabled || state.holdButton) return;
         state.holdButton = button;
         button.classList.add("active");
         if (button.setPointerCapture && event.pointerId !== undefined) {
@@ -529,6 +770,11 @@
 
       $("manual-button").addEventListener("click", () => setMode("manual"));
       $("automatic-button").addEventListener("click", () => setMode("automatic"));
+      $("language-button").addEventListener("click", () => {
+        state.language = state.language === "en" ? "vi" : "en";
+        try { localStorage.setItem("robodog-language", state.language); } catch (_) {}
+        applyLanguage();
+      });
 
       const keyboardCommands = {
         w: "forward", a: "turn_left", s: "stop", d: "turn_right",
@@ -567,8 +813,30 @@
         if (document.hidden) stopEverything();
       });
 
+      function releaseDashboard() {
+        if (state.released) return;
+        state.released = true;
+        if (state.holdButton) {
+          clearInterval(state.holdTimer);
+          state.holdTimer = null;
+          state.holdButton.classList.remove("active");
+          state.holdButton = null;
+          state.keyboardButton = null;
+          const stopBody = new Blob([JSON.stringify({ command: "stop" })], { type: "application/json" });
+          navigator.sendBeacon("/api/command", stopBody);
+        }
+        const releaseBody = new Blob(["{}"], { type: "application/json" });
+        if (!navigator.sendBeacon || !navigator.sendBeacon("/api/release", releaseBody)) {
+          fetch("/api/release", { method: "POST", body: releaseBody, keepalive: true }).catch(() => {});
+        }
+      }
+
+      state.language = initialLanguage();
+      applyLanguage();
+
       refreshStatus();
       setInterval(refreshStatus, 1000);
+      window.addEventListener("pagehide", releaseDashboard);
     })();
   </script>
 </body>

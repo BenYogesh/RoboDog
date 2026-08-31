@@ -1,9 +1,9 @@
-"""LAN media bridge used while the robot is in manual-control mode.
+"""LAN media bridge and dashboard used by the UNO Q.
 
 The UNO Q is the media relay.  The protocol intentionally uses only the
 Python standard library plus OpenCV, which is already required by DogVision:
 
-* ``GET /camera.mjpg`` - multipart MJPEG camera feed.
+* ``GET /camera.mjpg`` - multipart MJPEG camera feed, available in all modes.
 * microphone TCP - the UNO Q's local USB webcam microphone is published with
   an ``AUD0`` stream header followed by length-prefixed mono PCM16 frames at
   24 kHz.
@@ -38,6 +38,7 @@ from media_protocol import (
     stream_header as _stream_header,
 )
 MAX_AUDIO_FRAME_BYTES = 256 * 1024
+DASHBOARD_LEASE_S = 15.0
 DASHBOARD_PATH = Path(__file__).resolve().parent.parent / "web" / "dashboard.html"
 
 
@@ -51,8 +52,33 @@ class _CameraHandler(BaseHTTPRequestHandler):
 
     server: "_CameraServer"
 
+    @property
+    def client_host(self) -> str:
+        """Return the LAN address used to identify a dashboard device."""
+
+        return str(self.client_address[0])
+
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         path = self.path.split("?", 1)[0]
+        dashboard_path = path in {
+            "/",
+            "/dashboard",
+            "/dashboard.html",
+            "/api/status",
+            "/camera.mjpg",
+        }
+        if dashboard_path and not self.server.media.authorize_dashboard(
+            self.client_host
+        ):
+            if path in {"/", "/dashboard", "/dashboard.html"}:
+                self.server.media.serve_dashboard_busy(self)
+            else:
+                self._send_json(
+                    HTTPStatus.CONFLICT,
+                    self.server.media.dashboard_busy_payload(),
+                )
+            return
+
         if path in {"/", "/dashboard", "/dashboard.html"}:
             self.server.media.serve_dashboard(self)
             return
@@ -66,8 +92,22 @@ class _CameraHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         path = self.path.split("?", 1)[0]
+        if path == "/api/release":
+            released = self.server.media.release_dashboard(self.client_host)
+            self._send_json(
+                HTTPStatus.OK,
+                {"status": "released" if released else "ignored"},
+            )
+            return
         if path not in {"/api/command", "/api/mode"}:
             self.send_error(HTTPStatus.NOT_FOUND, "Unknown dashboard endpoint")
+            return
+
+        if not self.server.media.authorize_dashboard(self.client_host):
+            self._send_json(
+                HTTPStatus.CONFLICT,
+                self.server.media.dashboard_busy_payload(),
+            )
             return
 
         try:
@@ -146,9 +186,6 @@ class _CameraHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         while not self.server.media.stop_event.is_set():
-            if not self.server.media.active:
-                time.sleep(0.05)
-                continue
             frame = self.server.media.frame_provider()
             if frame is None:
                 time.sleep(0.02)
@@ -204,6 +241,16 @@ class ManualMediaServer:
         )
         self.stop_event = threading.Event()
         self._active = threading.Event()
+        self._dashboard_access_lock = threading.Lock()
+        self._dashboard_owner: str | None = None
+        self._dashboard_owner_seen = 0.0
+        try:
+            self.dashboard_lease_s = max(
+                5.0,
+                float(os.getenv("MANUAL_DASHBOARD_LEASE_S", str(DASHBOARD_LEASE_S))),
+            )
+        except ValueError:
+            self.dashboard_lease_s = DASHBOARD_LEASE_S
         self._audio_clients: set[socket.socket] = set()
         self._robot_speaker_clients: set[socket.socket] = set()
         self._clients_lock = threading.Lock()
@@ -245,9 +292,72 @@ class ManualMediaServer:
             self._dashboard_html,
         )
 
+    def serve_dashboard_busy(self, handler: _CameraHandler) -> None:
+        """Explain why another device cannot open the dashboard right now."""
+
+        body = (
+            "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>RoboDog dashboard busy</title>"
+            "<style>body{margin:2rem;background:#1b0e07;color:#fff1e6;"
+            "font:16px system-ui,sans-serif}main{max-width:36rem;margin:auto;"
+            "padding:2rem;border:1px solid #7b431f;border-radius:1rem;"
+            "background:#29150b}h1{color:#ff9d43}</style><main>"
+            "<h1>Dashboard in use</h1>"
+            "<p>Another device currently has dashboard access. Try again when it disconnects.</p>"
+            "<p>Trang điều khiển đang được thiết bị khác sử dụng. Hãy thử lại sau.</p>"
+            "</main></html>"
+        ).encode("utf-8")
+        handler._send_bytes(HTTPStatus.CONFLICT, "text/html; charset=utf-8", body)
+
+    @staticmethod
+    def dashboard_busy_payload() -> dict[str, str]:
+        return {
+            "status": "rejected",
+            "code": "dashboard_busy",
+            "message": "Dashboard is currently in use by another device.",
+        }
+
+    def authorize_dashboard(self, client_host: str) -> bool:
+        """Grant a short renewable dashboard lease to one LAN client.
+
+        The source address is used as a device identity because the dashboard
+        is intentionally a small trusted-LAN interface rather than an
+        authenticated public web service.
+        """
+
+        now = time.monotonic()
+        acquired = False
+        with self._dashboard_access_lock:
+            expired = (
+                self._dashboard_owner is None
+                or now - self._dashboard_owner_seen > self.dashboard_lease_s
+            )
+            if expired:
+                self._dashboard_owner = client_host
+                acquired = True
+            if self._dashboard_owner != client_host:
+                return False
+            self._dashboard_owner_seen = now
+        if acquired:
+            print("DASHBOARD_CLIENT_ACQUIRED")
+        return True
+
+    def release_dashboard(self, client_host: str) -> bool:
+        """Release the lease only when the request comes from its owner."""
+
+        with self._dashboard_access_lock:
+            if self._dashboard_owner != client_host:
+                return False
+            self._dashboard_owner = None
+            self._dashboard_owner_seen = 0.0
+        print("DASHBOARD_CLIENT_RELEASED")
+        return True
+
     def serve_status(self, handler: _CameraHandler) -> None:
         status: dict[str, Any] = {
             "media_active": self.active,
+            "camera_live": not self.stop_event.is_set(),
             "media": {
                 "camera": f"/camera.mjpg",
                 "audio_port": self.audio_port,
@@ -481,6 +591,9 @@ class ManualMediaServer:
     def stop(self) -> None:
         self.stop_event.set()
         self._active.clear()
+        with self._dashboard_access_lock:
+            self._dashboard_owner = None
+            self._dashboard_owner_seen = 0.0
         if self._camera_server is not None:
             self._camera_server.shutdown()
             self._camera_server.server_close()

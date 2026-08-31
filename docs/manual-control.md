@@ -19,7 +19,7 @@ the UNO Q to a wider network.
 
 | Port | Purpose | Wire format |
 | ---: | --- | --- |
-| 8080 | Camera | `GET /camera.mjpg`, multipart MJPEG |
+| 8080 | Dashboard and camera | `GET /`, `GET /camera.mjpg`, multipart MJPEG |
 | 3334 | UNO Q USB microphone to laptop | `AUD0`, then 24 kHz, 1-channel, 16-bit PCM frames |
 | 3335 | Laptop audio to robot | `AUD0`, then 16 kHz, 1-channel, 16-bit PCM frames |
 | 3336 | ESP32 speaker receiver | The same 16 kHz mono stream sent by port 3335 |
@@ -38,10 +38,17 @@ http://<uno-q-ip>:8080/
 ```
 
 It works from a modern phone, tablet, laptop, or desktop browser on the same
-private LAN. It provides the camera view, dashboard manual-mode entry, return
-to automatic mode, press-and-hold movement controls, posture/action/camera
-buttons, keyboard shortcuts, and live status. The browser sends JSON requests
-to `/api/mode` and `/api/command`, then polls `/api/status`.
+private LAN. The camera feed is live in automatic mode as well as manual mode.
+It provides dashboard manual-mode entry, return to automatic mode,
+press-and-hold movement controls, posture/action/camera buttons, keyboard
+shortcuts, language switching, and live status. The browser sends JSON
+requests to `/api/mode` and `/api/command`, then polls `/api/status`.
+
+Only one dashboard device is allowed at a time. The server identifies a device
+by its LAN source address, renews the lease while the page is open, and releases
+it when the page closes. A disconnected device's lease expires after 15 seconds
+by default. Set `MANUAL_DASHBOARD_LEASE_S` to change the timeout, with a minimum
+of 5 seconds.
 
 The first version does not use the browser microphone. The optional
 `manual_controller.py` client remains available for the audio relay.
@@ -103,9 +110,10 @@ flash it as the robot's gait firmware.
    expected if the legacy INMP441 path is still enabled.
 4. Say “manual control”. The UNO Q log should show `MANUAL_CONTROL_ENTERED`
    and `MANUAL_MEDIA_ACTIVE`; the OLED should show `MANUAL CONTROL`.
-5. Open `http://<uno-q-ip>:8080/` in a browser and press **Take dashboard
-   control**. Test the movement buttons only with the robot lifted or in a
-   safe open area. Press and hold movement buttons; releasing them sends stop.
+5. Open `http://<uno-q-ip>:8080/` in a browser. The camera should already be
+   live in automatic mode. Press **Take dashboard control** before testing
+   movement buttons, and test only with the robot lifted or in a safe open
+   area. Press and hold movement buttons; releasing them sends stop.
 6. Open `http://<uno-q-ip>:8080/camera.mjpg` directly if a raw camera stream is
    needed. A media client must
    connect to TCP port 3334 and parse the `AUD0` header plus framed mono PCM
