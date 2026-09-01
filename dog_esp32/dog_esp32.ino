@@ -124,7 +124,16 @@ constexpr float POSE_TRANSITION_EPSILON_MM = 0.5f;
 // In the sitting pose the robot's mass is behind the front-leg support.  A
 // negative body-frame X foot shift makes the body move forward over that
 // support before the folded rear legs are asked to extend.
-constexpr float SIT_EXIT_COM_SHIFT_X = -20.0f;
+constexpr float SIT_EXIT_COM_SHIFT_X = -30.0f;
+// For a sit -> stand transition, lower the rear feet part-way first.  This
+// gives the rear tibias a loaded push-up waypoint instead of asking them to
+// make the whole 80 mm extension in one blend.
+constexpr float SIT_EXIT_REAR_PUSH_Z = -120.0f;
+constexpr unsigned long SIT_EXIT_MIN_MS = 800;
+constexpr unsigned long SIT_EXIT_MAX_MS = 1600;
+// Let the transition own the exact foot trajectory; a small balance correction
+// remains available without allowing the IMU loop to cancel the lift.
+constexpr float POSE_TRANSITION_BALANCE_SCALE = 0.25f;
 
 FootTarget lastFootTarget[4] = {};
 FootTarget poseTransitionFrom[4] = {};
@@ -263,6 +272,10 @@ int syncCount = 0;      // Biến đếm tín hiệu đã gửi
 
 // Hàm cài đặt thông số từng servo
 constexpr uint8_t SERVO_COUNT = 12;
+constexpr uint16_t NORMAL_SERVO_SPEED = 3073;
+constexpr uint16_t POSE_TRANSITION_SERVO_SPEED = 2300;
+constexpr uint16_t POSE_TRANSITION_TIBIA_SPEED = 1600;
+constexpr uint8_t POSE_TRANSITION_SERVO_ACCEL = 40;
 constexpr bool ENABLE_SERVO_TELEMETRY = true;
 constexpr unsigned long SERVO_TELEMETRY_INTERVAL_MS = 100;
 u16 lastCommandedPosition[SERVO_COUNT + 1] = {};
@@ -276,8 +289,19 @@ void prepareST3215(int servoID, float angleDegrees, float dirMult) {
   int pos = constrain(2048 + (int)roundf(angleDegrees * 11.377f), 0, 4095);
   syncIDs[syncCount] = (u8)servoID;
   syncPositions[syncCount] = (s16)pos;
-  syncSpeeds[syncCount] = 3073;
-  syncAccels[syncCount] = 0;
+  // Static pose changes are load-bearing, especially while the rear tibias
+  // unfold from sitting.  A lower speed and bounded acceleration gives those
+  // joints more time to produce torque and reduces current spikes without
+  // changing the normal gait speed.
+  if (poseTransitionActive) {
+    syncSpeeds[syncCount] = servoID >= 9
+                              ? POSE_TRANSITION_TIBIA_SPEED
+                              : POSE_TRANSITION_SERVO_SPEED;
+    syncAccels[syncCount] = POSE_TRANSITION_SERVO_ACCEL;
+  } else {
+    syncSpeeds[syncCount] = NORMAL_SERVO_SPEED;
+    syncAccels[syncCount] = 0;
+  }
   if (servoID >= 1 && servoID <= SERVO_COUNT) {
     lastCommandedPosition[servoID] = (u16)pos;
   }
@@ -463,6 +487,8 @@ void beginPoseTransition(char targetPose, unsigned long now,
     for (int i = 0; i < 4; i++) from[i] = lastFootTarget[i];
   }
 
+  const bool sitExitToStand = startingFromSit
+                              && (targetPose == 's' || targetPose == 'z');
   poseTransitionHasWaypoint = targetPose != 'q' && startingFromSit;
   poseTransitionWaypointDurationMs = 0;
   float firstSegmentDistance = 0.0f;
@@ -484,6 +510,9 @@ void beginPoseTransition(char targetPose, unsigned long now,
     if (poseTransitionHasWaypoint) {
       getStaticPoseTarget('q', i, poseTransitionWaypoint[i]);
       poseTransitionWaypoint[i].x += SIT_EXIT_COM_SHIFT_X;
+      if (sitExitToStand && !legs[i].isFrontLeg) {
+        poseTransitionWaypoint[i].z = SIT_EXIT_REAR_PUSH_Z;
+      }
 
       const float firstDx = poseTransitionWaypoint[i].x - from[i].x;
       const float firstDy = poseTransitionWaypoint[i].y - from[i].y;
@@ -519,7 +548,13 @@ void beginPoseTransition(char targetPose, unsigned long now,
 
   float duration = (float)POSE_TRANSITION_MIN_MS
                    + pathDistance * POSE_TRANSITION_MS_PER_MM;
-  if (duration > (float)POSE_TRANSITION_MAX_MS) duration = (float)POSE_TRANSITION_MAX_MS;
+  const float transitionMaxMs = sitExitToStand
+                                ? (float)SIT_EXIT_MAX_MS
+                                : (float)POSE_TRANSITION_MAX_MS;
+  if (sitExitToStand && duration < (float)SIT_EXIT_MIN_MS) {
+    duration = (float)SIT_EXIT_MIN_MS;
+  }
+  if (duration > transitionMaxMs) duration = transitionMaxMs;
   poseTransitionDurationMs = (unsigned long)duration;
   if (poseTransitionHasWaypoint) {
     const float firstFraction = firstSegmentDistance / pathDistance;
@@ -1172,12 +1207,18 @@ void loop() {
       finalY = y;
       finalZ = z;
     } else {
-      finalX = x - balX;
-      finalY = y - balY + (isStance ? balY * 0.5f : 0.0f);
+      const float balanceScale = transitionFrame
+                                   ? POSE_TRANSITION_BALANCE_SCALE
+                                   : 1.0f;
+      finalX = x - balX * balanceScale;
+      finalY = y - balY * balanceScale
+               + (isStance ? balY * 0.5f * balanceScale : 0.0f);
       finalZ = z;
       if (isStance) {
-        finalZ += legs[i].isRightSide ? -balZ_Roll : balZ_Roll;
-        finalZ += legs[i].isFrontLeg ? -balZ_Pitch : balZ_Pitch;
+        finalZ += balanceScale
+                  * (legs[i].isRightSide ? -balZ_Roll : balZ_Roll);
+        finalZ += balanceScale
+                  * (legs[i].isFrontLeg ? -balZ_Pitch : balZ_Pitch);
       }
     }
 

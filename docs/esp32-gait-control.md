@@ -175,8 +175,13 @@ nhận một tư thế mới, firmware lưu tọa độ chân đang được đi
 nên mọi cặp chuyển tư thế đều dùng chung một đường đi và lệnh mới giữa chừng có
 thể đổi hướng an toàn. Khi rời tư thế ngồi (`q`), firmware chèn thêm một điểm
 trung gian dịch bàn chân `SIT_EXIT_COM_SHIFT_X` về phía sau trong hệ tọa độ thân,
-để đưa trọng tâm về trên hai chân trước trước khi duỗi chân sau. Lệnh `j` và
-watchdog cũng dùng đường chuyển về tư thế đứng này khi kết thúc.
+để đưa trọng tâm về trên hai chân trước. Với đường về tư thế đứng, hai chân sau
+còn hạ tới `SIT_EXIT_REAR_PUSH_Z` trước khi duỗi hết, tạo một điểm tựa có tải
+giúp tibia đẩy thân lên thay vì phải thực hiện toàn bộ hành trình trong một lần.
+Các chuyển tư thế tĩnh dùng tốc độ thấp hơn và gia tốc giới hạn cho tibia để
+giảm sụt nguồn và giữ lực nâng; hiệu chỉnh cân bằng IMU chỉ còn 25% trong lúc
+chuyển để không chống lại quỹ đạo. Lệnh `j` và watchdog cũng dùng đường chuyển
+về tư thế đứng này khi kết thúc.
 
 ## Đọc cảm biến MPU6050 để cân bằng
 
@@ -200,7 +205,10 @@ Từ kết quả góc, xung tín hiệu gửi tới servo được tính theo c�
 position = 2048 + angle_degrees x 11.377
 ```
 
-Kết quả được giới hạn trong khoảng 0-4095, điều chỉnh theo hướng quay của từng servo, tốc độ `3073` và gia tốc `0` (không giới hạn).
+Kết quả được giới hạn trong khoảng 0-4095, điều chỉnh theo hướng quay của từng
+servo. Gait thông thường dùng tốc độ `3073` và gia tốc `0`; trong chuyển tư thế
+tĩnh, tốc độ được hạ xuống (`1600` cho tibia, `2300` cho các khớp còn lại) và
+gia tốc đặt `40` để các khớp đang chịu tải có thêm thời gian tạo lực.
 
 Mỗi 100 ms, ESP32 đọc tín hiệu trả về từ 1 servo, rồi in ra thông số để theo dõi:
 
