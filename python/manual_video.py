@@ -19,6 +19,7 @@ DASHBOARD_PATH = Path(__file__).resolve().parent.parent / "web" / "dashboard.htm
 
 DashboardCommandHandler = Callable[[str], dict[str, Any]]
 DashboardModeHandler = Callable[[str], dict[str, Any]]
+DashboardCameraRestartHandler = Callable[[], dict[str, Any]]
 DashboardStatusProvider = Callable[[], dict[str, Any]]
 
 
@@ -74,7 +75,7 @@ class _CameraHandler(BaseHTTPRequestHandler):
                 {"status": "released" if released else "ignored"},
             )
             return
-        if path not in {"/api/command", "/api/mode"}:
+        if path not in {"/api/command", "/api/mode", "/api/camera/restart"}:
             self.send_error(HTTPStatus.NOT_FOUND, "Unknown dashboard endpoint")
             return
 
@@ -85,28 +86,33 @@ class _CameraHandler(BaseHTTPRequestHandler):
             )
             return
 
-        try:
-            payload = self._read_json()
-        except ValueError as error:
-            self._send_json(
-                HTTPStatus.BAD_REQUEST,
-                {"status": "error", "message": str(error)},
-            )
-            return
+        if path == "/api/camera/restart":
+            # The restart action has no user payload; authorization above still
+            # ensures only the current dashboard owner can trigger it.
+            result = self.server.video.handle_camera_restart()
+        else:
+            try:
+                payload = self._read_json()
+            except ValueError as error:
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"status": "error", "message": str(error)},
+                )
+                return
 
-        value = payload.get("command" if path == "/api/command" else "mode")
-        if not isinstance(value, str):
-            self._send_json(
-                HTTPStatus.BAD_REQUEST,
-                {"status": "error", "message": "Expected a string command or mode"},
-            )
-            return
+            value = payload.get("command" if path == "/api/command" else "mode")
+            if not isinstance(value, str):
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"status": "error", "message": "Expected a string command or mode"},
+                )
+                return
 
-        result = (
-            self.server.video.handle_dashboard_command(value)
-            if path == "/api/command"
-            else self.server.video.handle_dashboard_mode(value)
-        )
+            result = (
+                self.server.video.handle_dashboard_command(value)
+                if path == "/api/command"
+                else self.server.video.handle_dashboard_mode(value)
+            )
         status = result.get("status")
         http_status = (
             HTTPStatus.OK
@@ -228,6 +234,7 @@ class ManualVideoServer:
         self._thread: threading.Thread | None = None
         self._dashboard_command_handler: DashboardCommandHandler | None = None
         self._dashboard_mode_handler: DashboardModeHandler | None = None
+        self._dashboard_camera_restart_handler: DashboardCameraRestartHandler | None = None
         self._dashboard_status_provider: DashboardStatusProvider | None = None
         self._dashboard_html = self._load_dashboard_html()
 
@@ -257,11 +264,13 @@ class ManualVideoServer:
         command_handler: DashboardCommandHandler,
         mode_handler: DashboardModeHandler,
         status_provider: DashboardStatusProvider,
+        camera_restart_handler: DashboardCameraRestartHandler | None = None,
     ) -> None:
         """Attach robot callbacks after the server has been constructed."""
 
         self._dashboard_command_handler = command_handler
         self._dashboard_mode_handler = mode_handler
+        self._dashboard_camera_restart_handler = camera_restart_handler
         self._dashboard_status_provider = status_provider
 
     def serve_dashboard(self, handler: _CameraHandler) -> None:
@@ -371,6 +380,15 @@ class ManualVideoServer:
             return self._dashboard_mode_handler(mode)
         except Exception as error:
             print(f"Dashboard mode change failed: {error}")
+            return {"status": "error", "message": str(error)}
+
+    def handle_camera_restart(self) -> dict[str, Any]:
+        if self._dashboard_camera_restart_handler is None:
+            return {"status": "error", "message": "Camera restart is not initialized"}
+        try:
+            return self._dashboard_camera_restart_handler()
+        except Exception as error:
+            print(f"Camera restart failed: {error}")
             return {"status": "error", "message": str(error)}
 
     def start(self) -> None:

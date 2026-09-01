@@ -22,6 +22,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))                        
 DEFAULT_CAMERA_PATH = "/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0"
 camera_path = os.getenv("UNO_Q_CAMERA_PATH") or DEFAULT_CAMERA_PATH             # Đường dẫn đến cổng webcam
 
+CAMERA_READ_FAILURE_LIMIT = 5
+CAMERA_RESTART_BACKOFF_S = 0.5
+CAMERA_FRAME_STALE_S = 1.5
+
 
 def send_motor_command(command):
     # Gửi lệnh điều khiển động cơ đến Arduino thông qua cầu nối
@@ -36,36 +40,191 @@ def send_motor_command(command):
 class CameraStream:
     # Lớp quản lý luồng video từ webcam, đọc khung hình liên tục và lưu trữ khung hình mới nhất
     def __init__(self, path, width=640, height=480):
-        self.cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        if not self.cap.isOpened():
-            print(f"CAMERA ERROR: could not open '{path}'.")
-
+        self.path = path
+        self.width = width
+        self.height = height
+        self.cap = None
+        self._cap_lock = threading.Lock()
         self.lock = threading.Lock()
         self.frame = None
+        self._status_lock = threading.Lock()
+        self._camera_live = False
+        self._last_frame_at = 0.0
+        self._restart_count = 0
+        self._last_restart_reason = None
+        self._last_camera_error = None
+        self._restart_requested = threading.Event()
+        self._restart_reason_lock = threading.Lock()
+        self._restart_reason = "startup"
         self.running = True
+        self._replace_capture("startup")
         self.thread = threading.Thread(target=self._update, daemon=True)
         self.thread.start()
+
+    def _create_capture(self):
+        cap = cv2.VideoCapture(self.path, cv2.CAP_V4L2)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
+
+    def _set_camera_error(self, message):
+        with self._status_lock:
+            self._camera_live = False
+            self._last_camera_error = str(message)
+
+    def _record_frame(self, now):
+        with self._status_lock:
+            self._camera_live = True
+            self._last_frame_at = now
+            self._last_camera_error = None
+
+    def _replace_capture(self, reason):
+        """Release and reopen the V4L2 handle from the reader thread."""
+
+        with self._cap_lock:
+            old_cap = self.cap
+            self.cap = None
+        if old_cap is not None:
+            try:
+                old_cap.release()
+            except Exception:
+                pass
+
+        new_cap = None
+        try:
+            new_cap = self._create_capture()
+            opened = bool(new_cap.isOpened())
+        except Exception as error:
+            if new_cap is not None:
+                try:
+                    new_cap.release()
+                except Exception:
+                    pass
+            self._set_camera_error(f"open failed: {error}")
+            print(f"CAMERA WARNING: reopen failed ({reason}): {error}")
+            return False
+
+        if not opened:
+            try:
+                new_cap.release()
+            except Exception:
+                pass
+            message = f"could not open '{self.path}'"
+            self._set_camera_error(message)
+            if reason == "startup":
+                print(f"CAMERA ERROR: {message}.")
+            else:
+                print(f"CAMERA WARNING: reopen failed ({reason}): {message}.")
+            return False
+
+        if not self.running:
+            try:
+                new_cap.release()
+            except Exception:
+                pass
+            return False
+
+        with self._cap_lock:
+            self.cap = new_cap
+        with self.lock:
+            self.frame = None
+        with self._status_lock:
+            self._camera_live = False
+            self._last_frame_at = 0.0
+            self._last_camera_error = None
+            self._last_restart_reason = reason
+            if reason != "startup":
+                self._restart_count += 1
+
+        if reason != "startup":
+            print(f"CAMERA RESTARTED: {reason}")
+        return True
+
+    def restart(self, reason="manual"):
+        """Request a non-blocking release/reopen of the webcam handle."""
+
+        if not self.running:
+            return False
+        with self._restart_reason_lock:
+            self._restart_reason = str(reason)
+        self._restart_requested.set()
+        print(f"CAMERA RESTART REQUESTED: {reason}")
+        return True
+
+    def status(self):
+        """Return health information for the dashboard/API."""
+
+        now = time.monotonic()
+        with self._status_lock:
+            live = self._camera_live and now - self._last_frame_at <= CAMERA_FRAME_STALE_S
+            return {
+                "camera_live": live,
+                "camera_restart_count": self._restart_count,
+                "camera_last_restart_reason": self._last_restart_reason,
+                "camera_error": self._last_camera_error,
+            }
+
+    def _take_restart_reason(self):
+        with self._restart_reason_lock:
+            return self._restart_reason
 
     def _update(self):
         # Luồng phụ liên tục đọc khung hình từ webcam và lưu trữ khung hình mới nhất
         fail_count = 0
+        next_retry_at = 0.0
         while self.running:
-            if not self.cap.isOpened():
-                time.sleep(1)
+            now = time.monotonic()
+            if self._restart_requested.is_set():
+                self._restart_requested.clear()
+                self._replace_capture(self._take_restart_reason())
+                fail_count = 0
+                next_retry_at = time.monotonic() + CAMERA_RESTART_BACKOFF_S
                 continue
-            ret, frame = self.cap.read()
-            if ret:
+
+            with self._cap_lock:
+                cap = self.cap
+            if cap is None:
+                if now < next_retry_at:
+                    time.sleep(min(0.05, next_retry_at - now))
+                    continue
+                self._replace_capture("auto-reconnect")
+                fail_count = 0
+                next_retry_at = time.monotonic() + CAMERA_RESTART_BACKOFF_S
+                continue
+
+            try:
+                opened = bool(cap.isOpened())
+            except Exception as error:
+                opened = False
+                self._set_camera_error(f"status failed: {error}")
+            if not opened:
+                self._replace_capture("device-closed")
+                fail_count = 0
+                next_retry_at = time.monotonic() + CAMERA_RESTART_BACKOFF_S
+                continue
+
+            try:
+                ret, frame = cap.read()
+            except Exception as error:
+                ret, frame = False, None
+                self._set_camera_error(f"read failed: {error}")
+            if ret and frame is not None:
                 fail_count = 0
                 with self.lock:
                     self.frame = frame
+                self._record_frame(time.monotonic())
             else:
                 fail_count += 1
-                if fail_count % 30 == 1:
+                self._set_camera_error(f"read failed ({fail_count} consecutive times)")
+                if fail_count == 1 or fail_count % CAMERA_READ_FAILURE_LIMIT == 0:
                     print(f"CAMERA WARNING: read() failed ({fail_count} times so far)")
-                time.sleep(0.1)
+                if fail_count >= CAMERA_READ_FAILURE_LIMIT:
+                    self._replace_capture(f"read-fail-{fail_count}")
+                    fail_count = 0
+                    next_retry_at = time.monotonic() + CAMERA_RESTART_BACKOFF_S
+                else:
+                    time.sleep(0.05)
 
     def read(self):
         # Trả về khung hình mới nhất từ webcam, nếu không có khung hình nào thì trả về None
@@ -75,8 +234,13 @@ class CameraStream:
     def stop(self):
         # Dừng luồng đọc khung hình và giải phóng tài nguyên của webcam
         self.running = False
+        self._restart_requested.set()
         self.thread.join(timeout=1)
-        self.cap.release()
+        with self._cap_lock:
+            cap = self.cap
+            self.cap = None
+        if cap is not None:
+            cap.release()
 
 
 # Lệnh điều khiển robot
@@ -515,7 +679,7 @@ def dashboard_status():
         control_mode = f"manual-{manual_control_source or 'unknown'}"
     else:
         control_mode = "automatic"
-    return {
+    status = {
         "control_mode": control_mode,
         "robot_state": robot_state,
         "manual_source": manual_control_source,
@@ -527,6 +691,16 @@ def dashboard_status():
         "last_command_at": last_dashboard_command_at,
         "last_error": last_dashboard_error,
     }
+    status.update(cam.status())
+    return status
+
+
+def force_restart_camera():
+    """Ask the camera reader thread to release and reopen the webcam."""
+
+    if not cam.restart(reason="dashboard"):
+        return {"status": "error", "message": "Camera stream is stopped"}
+    return {"status": "accepted", "message": "Camera restart requested"}
 
 POINT_VERTICAL_THRESHOLD = 20.0
 WRIST = 0
@@ -774,6 +948,7 @@ manual_video.configure_dashboard(
     command_handler=handle_dashboard_command,
     mode_handler=handle_dashboard_mode,
     status_provider=dashboard_status,
+    camera_restart_handler=force_restart_camera,
 )
 
 

@@ -26,6 +26,7 @@ The dashboard provides:
 - a button to take or release dashboard control;
 - press-and-hold movement controls with a stop-on-release safeguard;
 - posture, action, and camera commands;
+- a **Restart camera** action for recovering from a USB power dip;
 - keyboard shortcuts (`W/A/S/D`, `E/F`, `B`, `Q`, `C`, `Z`, and Space);
 - bilingual English/Vietnamese labels and live control status.
 
@@ -41,6 +42,16 @@ then sent as the same framed `CMD:<character>` messages used by the UNO Q.
 If Bluetooth sends `M` while the dashboard is open, Bluetooth takes ownership;
 the dashboard remains visible but its movement requests are rejected until
 automatic mode is restored.
+
+### Camera recovery
+
+`CameraStream` watches for consecutive failed reads. After five failures it
+releases and reopens the V4L2 device in its reader thread, retrying with a
+short backoff if the webcam is still powered down. This recovery does not block
+the vision/control loop. The dashboard's **Restart camera** button calls
+`POST /api/camera/restart` to request the same release/reopen path manually.
+The status endpoint reports `camera_live`, `camera_restart_count`, and the last
+camera error.
 
 ## Firmware boundary
 
