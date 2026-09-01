@@ -27,7 +27,9 @@ The dashboard provides:
 - press-and-hold movement controls with a stop-on-release safeguard;
 - posture, action, and camera commands;
 - a **Restart camera** action for recovering from a USB power dip;
-- keyboard shortcuts (`W/A/S/D`, `E/F`, `B`, `Q`, `C`, `Z`, and Space);
+- keyboard shortcuts: `W/A/S/D` move, `E/F` crab-step, `Q` sit, `C` prone,
+  `Z` hold, and `Space` stops; `B` remains a backward alias (`S` and `B` both
+  send the backend `b` command);
 - bilingual English/Vietnamese labels and live control status.
 
 Only one dashboard device is allowed at a time. The server identifies a device
