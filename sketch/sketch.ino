@@ -93,6 +93,21 @@ void send_motor_command(String command) {
   Serial1.write('\n');
 }
 
+void set_control_mode(String mode) {
+  // Dashboard mode pauses Python autonomy while leaving the ESP32 UART path
+  // available for browser commands. Bluetooth M/O remains available locally.
+  mode.trim();
+  mode.toLowerCase();
+  if (mode == "manual") {
+    Serial1.print("MODE:MANUAL\n");
+  } else if (mode == "automatic" || mode == "auto") {
+    Serial1.print("MODE:AUTO\n");
+  } else {
+    return;
+  }
+  Serial1.flush();
+}
+
 void read_esp32_status() {
   while (Serial1.available() > 0) {
     const char character = static_cast<char>(Serial1.read());
@@ -125,6 +140,7 @@ void setup() {
 
   Bridge.begin();
   Bridge.provide_safe("send_motor_command", send_motor_command);
+  Bridge.provide_safe("set_control_mode", set_control_mode);
   Bridge.provide_safe("update_face_matrix", handle_face_expression);
 }
 

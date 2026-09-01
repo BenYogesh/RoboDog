@@ -28,6 +28,7 @@ flowchart TD
     Bridge --> Sketch["sketch/sketch.ino <br>xử lý Bridge"]
     Sketch --> Matrix["Hiển thị lên <br>ma trận LED của Uno Q"]
     Sketch --> UART["Gửi tín hiệu <br>tới ESP32 qua Serial1"]
+    Stream --> Dashboard["manual_video.py <br>webcam + dashboard :8080"]
 ```
 
 ## Chỉ mục các file code
@@ -35,7 +36,7 @@ flowchart TD
 | --- | --- |
 | `sketch/sketch.ino` | Code xử lý Bridge - giao tiếp giữa 2 chip trong Arduino Uno Q. Điều khiển ma trận LED, đưa tín hiệu tới ESP32 và chuyển thông báo chế độ Bluetooth về Python. |
 | `python/main.py` | Code điều phối chính: Xử lý luồng hình ảnh từ camera; Chạy mô hình nhận dạng khuôn mặt, cử chỉ, đồ vật; Chuyển đổi trạng thái robot; Giao tiếp Bridge. |
-| `python/manual_video.py` | Phát luồng MJPEG từ webcam trên cổng 8080 khi ESP32 báo đang ở chế độ Bluetooth thủ công. |
+| `python/manual_video.py` | Phát luồng MJPEG và dashboard điều khiển trên cổng 8080; quản lý quyền một thiết bị. |
 | `dog_esp32/dog_esp32.ino` | Firmware chuyển động, camera servo, Bluetooth và watchdog trên ESP32. |
 | `python/detector.py` | Code nhận dạng cử chỉ bàn tay, sử dụng mô hình MediaPipe. |
 | `python/hand_models/` | Thư mục chứa các file mô hình MediaPipe giúp nhận dạng bàn tay. |
@@ -48,7 +49,7 @@ flowchart TD
 
 ## Quá trình khởi động
 1. `sketch/sketch.ino` mở cổng `Serial1`, khởi động ma trận LED trên Arduino UNO Q và thư viện Arduino Router Bridge.
-2. `sketch/sketch.ino` khai báo hai hàm Bridge: `send_motor_command` và `update_face_matrix`; đồng thời chuyển `MODE:MANUAL`/`MODE:AUTO` từ ESP32 về Python.
+2. `sketch/sketch.ino` khai báo các hàm Bridge `send_motor_command`, `set_control_mode` và `update_face_matrix`; đồng thời chuyển `MODE:MANUAL`/`MODE:AUTO` từ ESP32 về Python.
 3. `python/main.py` khởi động, chạy `Bridge`, mở luồng hình ảnh `CameraStream` từ webcam.
 4. `python/main.py` khai báo 3 chương trình xử lý hình ảnh: `HandGestureDetector`, `FaceGate`, và `BallTracker`.
 5. `verify_face_models()` kiểm tra mô hình YuNet và SFace đã cài đặt có tương thích với OpenCV không.
@@ -73,6 +74,7 @@ Mỗi vòng lặp của `main_loop` trong `python/main.py` sẽ chạy theo th�
 | --- | --- | --- |
 | `bridge.call("update_face_matrix", expression)` | `handle_face_expression(String expression)` | Vẽ biểu cảm khuôn mặt lên ma trận LED trên Uno Q |
 | `bridge.call("send_motor_command", command)` | `send_motor_command(String command)` | Chuyển lệnh tới ESP32 qua `Serial1`. |
+| `bridge.call("set_control_mode", mode)` | `set_control_mode(String mode)` | Yêu cầu ESP32 chuyển quyền nhận lệnh giữa Bluetooth và UNO Q. |
 
 ### Giao tiếp giữa Arduino Uno Q và ESP32
 `send_motor_command` gửi tín hiệu điều khiển - là một kí tự duy nhất - qua UART `Serial1` theo mẫu:
@@ -114,6 +116,7 @@ Danh sách lệnh đang được Python sử dụng:
 | `STATE_SITTING` | Trạng thái ngồi, chỉ nhận lệnh chỉ lên hoặc xuống. |
 | `STATE_PRONE` | Trạng thái nằm; chỉ nhận lệnh chỉ lên. |
 | `STATE_CHASING` | Trạng thái đuổi theo đối tượng tự động. |
+| `STATE_MANUAL` | Tạm dừng quyết định tự động; giữ nhận diện tay để giám sát và nhận lệnh từ Bluetooth hoặc dashboard. |
 
 Tùy theo trạng thái mà lệnh điều khiển bằng cử chỉ được xử lý khác nhau
 | Trạng thái hiện tại | Cử chỉ | Mệnh lệnh | Trạng thái tiếp theo |

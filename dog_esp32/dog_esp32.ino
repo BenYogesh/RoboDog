@@ -516,6 +516,16 @@ void resetUnoCommandParser() {
 }
 
 void processUnoFrame(const String &frame, char &command, bool allowMotion) {
+  // The UNO Q uses explicit mode frames for dashboard ownership. Bluetooth
+  // M/O still uses the notify=true path above so Python receives the change.
+  if (frame == "MODE:MANUAL") {
+    setControlMode(CONTROL_MANUAL, false);
+    return;
+  }
+  if (frame == "MODE:AUTO") {
+    setControlMode(CONTROL_AUTOMATIC, false);
+    return;
+  }
   if (!frame.startsWith("CMD:") || frame.length() != 5) return;
   const char candidate = frame.charAt(4);
   if (allowMotion && controlMode == CONTROL_AUTOMATIC &&

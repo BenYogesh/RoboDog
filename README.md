@@ -8,7 +8,7 @@ Included capabilities:
 - Face recognition and familiar-face gating
 - Ball detection and autonomous tracking
 - Bluetooth-only manual control on the ESP32
-- Live webcam feed while manual mode is active
+- Browser dashboard with live webcam feed and manual control
 
 For a guided explanation of the code layout and runtime dataflow, see
 [`docs/system-structure-dataflow.md`](docs/system-structure-dataflow.md).
@@ -20,7 +20,7 @@ and board-side testing, see
 For the ESP32 leg kinematics, gait tuning, balancing, and safe gait tests, see
 [`docs/esp32-gait-control.md`](docs/esp32-gait-control.md).
 
-For manual Bluetooth control with a live webcam feed, see
+For Bluetooth/manual dashboard control with a live webcam feed, see
 [`docs/manual-control.md`](docs/manual-control.md).
 
 The Python app is `python/main.py` and uses this camera path:
@@ -28,6 +28,10 @@ The Python app is `python/main.py` and uses this camera path:
 ```text
 /dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0
 ```
+
+The dashboard is served on port `8080` while DogVision is running. Bluetooth
+manual mode remains owned by the ESP32; the browser can take control only after
+Bluetooth has returned the robot to automatic mode.
 
 ## Enroll Known Faces
 

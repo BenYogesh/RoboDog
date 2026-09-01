@@ -19,15 +19,18 @@ cv2.setNumThreads(1)    # Khởi tạo OpenCV để sử dụng một luồng du
 bridge = Bridge()       # Khởi tạo cầu nối giữa Python và Arduino để gửi lệnh điều khiển robot
 
 current_dir = os.path.dirname(os.path.abspath(__file__))                        # Thư mục hiện tại của file main.py
-camera_path = "/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0"    # Đường dẫn đến cổng webcam
+DEFAULT_CAMERA_PATH = "/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0"
+camera_path = os.getenv("UNO_Q_CAMERA_PATH") or DEFAULT_CAMERA_PATH             # Đường dẫn đến cổng webcam
 
 
 def send_motor_command(command):
     # Gửi lệnh điều khiển động cơ đến Arduino thông qua cầu nối
     try:
         bridge.call("send_motor_command", command)
+        return True
     except Exception as error:
         print(f"Bridge call failed: {error}")
+        return False
 
 
 class CameraStream:
@@ -107,6 +110,8 @@ CAMERA_SCAN_RETURNING = "RETURNING"
 cam = CameraStream(camera_path)
 manual_video = ManualVideoServer(cam.read)
 manual_video.start()
+last_face_status = "none"
+last_hand_detected = False
 detector = HandGestureDetector(score_threshold=0.6, conf_threshold=0.6)
 verify_face_models()
 face_gate = FaceGate()
@@ -336,52 +341,192 @@ STATE_PRONE = "PRONE"
 STATE_CHASING = "CHASING"
 STATE_MANUAL = "MANUAL_CONTROL"
 robot_state = STATE_STANDING
+manual_control_source = None
 COMMAND_COOLDOWN_S = 0.7
 POSTURE_TRANSITION_COOLDOWN_S = 2.0
 command_cooldown_until = 0.0
+last_dashboard_command = None
+last_dashboard_command_at = None
+last_dashboard_error = None
 
 
-def enter_manual_control():
-    """Pause autonomous vision decisions and expose the webcam feed."""
-    global robot_state, command_cooldown_until
+def send_control_mode(mode):
+    """Tell the UNO Q which control source the ESP32 should accept."""
+    try:
+        bridge.call("set_control_mode", mode)
+        return True
+    except Exception as error:
+        print(f"Control-mode Bridge call failed: {error}")
+        return False
+
+
+def enter_manual_control(source="bluetooth", notify_esp32=True):
+    """Stop autonomous motion and expose the webcam/dashboard controls."""
+    global robot_state, manual_control_source, command_cooldown_until
     global camera_scan_state, camera_scan_direction, camera_net_offset_s
     global camera_hand_confirmations, python_cam_state
 
+    send_motor_command(CMD_STOP)
+    send_motor_command(CAM_CMD_NEUTRAL)
     camera_scan_state = CAMERA_SCAN_IDLE
     camera_scan_direction = 0
     camera_net_offset_s = 0.0
     camera_hand_confirmations = 0
     python_cam_state = "N"
+    if notify_esp32:
+        send_control_mode("manual")
     robot_state = STATE_MANUAL
+    manual_control_source = source
     command_cooldown_until = 0.0
     manual_video.set_active(True)
     _log_status("MANUAL CONTROL")
 
 
-def leave_manual_control():
+def leave_manual_control(source="bluetooth", notify_esp32=True):
     """Return to gesture, face, and ball processing after Bluetooth exits."""
-    global robot_state, command_cooldown_until
+    global robot_state, manual_control_source, command_cooldown_until
     global camera_scan_state, camera_scan_direction, camera_net_offset_s
     global camera_hand_confirmations, python_cam_state
 
     manual_video.set_active(False)
+    if notify_esp32:
+        send_control_mode("automatic")
+    send_motor_command(CMD_STOP)
+    send_motor_command(CAM_CMD_NEUTRAL)
     camera_scan_state = CAMERA_SCAN_IDLE
     camera_scan_direction = 0
     camera_net_offset_s = 0.0
     camera_hand_confirmations = 0
     python_cam_state = "N"
     robot_state = STATE_STANDING
+    manual_control_source = None
     command_cooldown_until = time.time() + POSTURE_TRANSITION_COOLDOWN_S
     _log_status("AUTOMATIC CONTROL")
 
 
 def handle_esp32_control_mode(mode):
     """Follow Bluetooth M/O mode notifications from the ESP32."""
+    global manual_control_source
     normalized = str(mode).strip().lower()
-    if normalized == "manual" and robot_state != STATE_MANUAL:
-        enter_manual_control()
+    if normalized == "manual":
+        if robot_state != STATE_MANUAL:
+            enter_manual_control("bluetooth", notify_esp32=False)
+        elif manual_control_source != "bluetooth":
+            # Bluetooth has priority if it enters manual mode while the
+            # browser dashboard is open.
+            manual_control_source = "bluetooth"
+            print("MANUAL_CONTROL_OWNER=bluetooth")
     elif normalized in {"automatic", "auto"} and robot_state == STATE_MANUAL:
-        leave_manual_control()
+        leave_manual_control("bluetooth", notify_esp32=False)
+
+
+# Names accepted by the browser dashboard. Values are the same one-byte
+# command vocabulary used by the ESP32 firmware and the Bluetooth client.
+DASHBOARD_COMMANDS = {
+    "forward": "w",
+    "backward": "b",
+    "turn_left": "a",
+    "turn_right": "d",
+    "crab_left": "e",
+    "crab_right": "f",
+    "pace": "p",
+    "stop": "s",
+    "stand": "s",
+    "hold": "z",
+    "sit": "q",
+    "prone": "c",
+    "wave": "g",
+    "bounce": "u",
+    "jump": "j",
+    "center": "k",
+    "camera_up": "h",
+    "camera_down": "l",
+    "camera_neutral": "n",
+    "camera_scan_up": "r",
+    "camera_scan_down": "v",
+    "camera_stop": "x",
+}
+
+
+def handle_dashboard_command(command):
+    """Accept one dashboard command only while the dashboard owns manual mode."""
+    global last_dashboard_command, last_dashboard_command_at, last_dashboard_error
+
+    normalized = str(command).lower().strip()
+    uart_command = DASHBOARD_COMMANDS.get(normalized)
+    if uart_command is None and len(normalized) == 1:
+        if normalized in set(DASHBOARD_COMMANDS.values()):
+            uart_command = normalized
+    if uart_command is None:
+        last_dashboard_error = f"Unsupported dashboard command: {normalized!r}"
+        return {"status": "rejected", "message": last_dashboard_error}
+
+    if robot_state != STATE_MANUAL or manual_control_source != "dashboard":
+        owner = manual_control_source or "automatic"
+        last_dashboard_error = (
+            f"Dashboard is not the active control source ({owner})"
+        )
+        return {"status": "rejected", "message": last_dashboard_error}
+
+    if not send_motor_command(uart_command):
+        last_dashboard_error = "Could not send command through the UNO Q bridge"
+        return {"status": "error", "message": last_dashboard_error}
+
+    last_dashboard_command = normalized
+    last_dashboard_command_at = time.time()
+    last_dashboard_error = None
+    _log_status(f"WEB: {normalized.upper()}")
+    print(f"DASHBOARD_COMMAND_ACCEPTED: {normalized} -> {uart_command}")
+    return {"status": "accepted", "command": normalized, "uart": uart_command}
+
+
+def handle_dashboard_mode(mode):
+    """Enter or leave the browser-controlled state."""
+    global last_dashboard_error
+
+    normalized = str(mode).lower().strip()
+    if normalized in {"manual", "dashboard"}:
+        if robot_state == STATE_MANUAL and manual_control_source == "bluetooth":
+            last_dashboard_error = "Bluetooth currently owns manual control"
+            return {"status": "rejected", "message": last_dashboard_error}
+        if robot_state != STATE_MANUAL or manual_control_source != "dashboard":
+            enter_manual_control("dashboard", notify_esp32=False)
+            # Python autonomy is paused, while the ESP32 remains in its UART
+            # accepting mode for dashboard commands.
+            send_control_mode("automatic")
+        last_dashboard_error = None
+        print("DASHBOARD_CONTROL_ENTERED")
+        return {"status": "accepted", "mode": "dashboard"}
+
+    if normalized in {"automatic", "auto"}:
+        if robot_state == STATE_MANUAL:
+            leave_manual_control("dashboard")
+        last_dashboard_error = None
+        print("DASHBOARD_CONTROL_EXITED")
+        return {"status": "accepted", "mode": "automatic"}
+
+    last_dashboard_error = f"Unsupported dashboard mode: {normalized!r}"
+    return {"status": "rejected", "message": last_dashboard_error}
+
+
+def dashboard_status():
+    """Return the state snapshot rendered by the browser dashboard."""
+    if robot_state == STATE_MANUAL:
+        control_mode = f"manual-{manual_control_source or 'unknown'}"
+    else:
+        control_mode = "automatic"
+    return {
+        "control_mode": control_mode,
+        "robot_state": robot_state,
+        "manual_source": manual_control_source,
+        "camera_path": camera_path,
+        "face_status": last_face_status,
+        "hand_detected": last_hand_detected,
+        "camera_scan_state": camera_scan_state,
+        "last_command": last_dashboard_command,
+        "last_command_at": last_dashboard_command_at,
+        "last_error": last_dashboard_error,
+    }
 
 POINT_VERTICAL_THRESHOLD = 20.0
 WRIST = 0
@@ -424,6 +569,7 @@ last_status = ""
 def main_loop():
     global inference_counter, robot_state, command_cooldown_until
     global last_familiar_time, next_face_check_at
+    global last_face_status, last_hand_detected
 
     try:
         frame = cam.read()
@@ -434,11 +580,17 @@ def main_loop():
         # Bluetooth owns every movement command in manual mode. The camera
         # reader continues running so ManualVideoServer can publish frames.
         if robot_state == STATE_MANUAL:
+            # Keep hand inference alive for status/monitoring even though
+            # manual movement ownership belongs to Bluetooth or the dashboard.
+            inference_counter += 1
+            if inference_counter % 3 == 0:
+                last_hand_detected = bool(detector.detect(frame))
             return
 
         if robot_state == STATE_CHASING:
             if ball_tracker.should_check_manual_stop():
                 hands = detector.detect(frame)
+                last_hand_detected = bool(hands)
                 if hands and is_pointing_down(hands[0]["landmarks"]):
                     send_motor_command(CMD_STOP)
                     robot_state = STATE_STANDING
@@ -477,6 +629,7 @@ def main_loop():
             return
 
         hands = detector.detect(frame)
+        last_hand_detected = bool(hands)
         now = time.monotonic()
         face_status = "none"
         if now >= next_face_check_at:
@@ -487,6 +640,7 @@ def main_loop():
             )
             next_face_check_at = now + face_period
             face_status, _ = face_gate.recognize(frame)
+            last_face_status = face_status
             if face_status == "familiar":
                 last_familiar_time = time.time()
                 set_face_matrix("smiley")
@@ -614,6 +768,13 @@ def _log_status(status):
         return
     print(f"ROBOT_STATUS: {status}")
     last_status = status
+
+
+manual_video.configure_dashboard(
+    command_handler=handle_dashboard_command,
+    mode_handler=handle_dashboard_mode,
+    status_provider=dashboard_status,
+)
 
 
 try:
