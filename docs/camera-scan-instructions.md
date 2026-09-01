@@ -81,17 +81,20 @@ Edit these values in `dog_esp32.ino`:
 
 ```cpp
 constexpr int CAMERA_SERVO_STOP_US = 1500;
-constexpr int CAMERA_SERVO_UP_US = 1700;
-constexpr int CAMERA_SERVO_DOWN_US = 1300;
-constexpr unsigned long CAMERA_TILT_STEP_MS = 250;
-constexpr unsigned long CAMERA_SCAN_MAX_MS = 1800;
+constexpr int CAMERA_SERVO_UP_US = 1440;
+constexpr int CAMERA_SERVO_DOWN_US = 1560;
+constexpr unsigned long CAMERA_TILT_STEP_MS = 100;
+constexpr unsigned long CAMERA_SCAN_MAX_MS = 500;
 ```
 
 - `CAMERA_SERVO_STOP_US`: Adjust until the servo is fully still. Start with
   1500 microseconds, then change in small steps such as 5–10 microseconds.
 - `CAMERA_SERVO_UP_US` and `CAMERA_SERVO_DOWN_US`: Set equal-size offsets on
-  opposite sides of the stop value. If scanning moves the lens down, swap these
-  two values.
+  opposite sides of the stop value. The current replacement mechanism is
+  reversed, so the logical up value is below neutral and the logical down value
+  is above neutral. The ±60 microsecond offsets slow its faster drive; tune in
+  5–10 microsecond steps if needed. If scanning moves the lens in the wrong
+  direction, swap these two values.
 - `CAMERA_TILT_STEP_MS`: Length of a manual `h` or `l` movement. Keep it small
   because it is not position-controlled.
 - `CAMERA_SCAN_MAX_MS`: Physical travel safety limit. Set it below the time

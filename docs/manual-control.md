@@ -27,6 +27,8 @@ The dashboard provides:
 - press-and-hold movement controls with a stop-on-release safeguard;
 - posture, action, and camera commands;
 - a **Restart camera** action for recovering from a USB power dip;
+- a full-width status/debug panel with control, detection, scan, and camera
+  restart details;
 - keyboard shortcuts: `W/A/S/D` move, `E/F` crab-step, `Q` sit, `C` prone,
   `Z` hold, and `Space` stops; `B` remains a backward alias (`S` and `B` both
   send the backend `b` command);

@@ -26,8 +26,11 @@ Servo cameraTiltServo;
 
 #define CAMERA_SERVO_PIN 27 // Servo quay camera
 constexpr int CAMERA_SERVO_STOP_US = 1500;
-constexpr int CAMERA_SERVO_UP_US = 1600;
-constexpr int CAMERA_SERVO_DOWN_US = 1400;
+// The replacement camera mechanism reverses the old motion direction. Keep
+// the pulse offsets close to neutral so its faster drive moves at a usable
+// scan speed; tune them in 5–10 microsecond steps if the mechanism needs it.
+constexpr int CAMERA_SERVO_UP_US = 1440;
+constexpr int CAMERA_SERVO_DOWN_US = 1560;
 constexpr unsigned long CAMERA_TILT_STEP_MS = 100;
 constexpr unsigned long CAMERA_SCAN_MAX_MS = 500;
 #define BOOT_GRACE_PERIOD_MS 7000  // ignore serial input right after power-up, \

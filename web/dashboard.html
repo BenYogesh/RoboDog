@@ -58,9 +58,12 @@
     .pill.good { color: var(--good); border-color: rgba(84, 214, 154, .48); }
     .pill.warning { color: var(--warning); border-color: rgba(255, 200, 87, .48); }
     .pill.danger { color: var(--danger); border-color: rgba(255, 107, 107, .48); }
-    .layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); gap: .7rem; align-items: start; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); grid-template-areas: "camera mode" "camera controls" "debug debug"; gap: .7rem; align-items: stretch; }
     .card { border: 1px solid var(--border); border-radius: 14px; padding: .7rem; background: rgba(36, 21, 12, .96); box-shadow: 0 12px 30px rgba(76, 30, 0, .3); }
-    .camera-card { grid-row: span 2; }
+    .camera-card { grid-area: camera; }
+    .mode-card { grid-area: mode; }
+    .controls-card { grid-area: controls; }
+    .debug-card { grid-area: debug; }
     .card-header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
     .camera-frame { position: relative; overflow: hidden; min-height: 220px; aspect-ratio: 4 / 3; border: 1px solid var(--border); border-radius: 12px; background: #0c0805; }
     .camera-frame img { display: block; width: 100%; height: 100%; min-height: 220px; object-fit: contain; }
@@ -75,7 +78,7 @@
     .group + .group { margin-top: .7rem; }
     .group-title { margin-bottom: .4rem; color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
     .button-row.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-    .status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+    .status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .45rem; }
     .status-item { min-width: 0; padding: .45rem .55rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(56, 32, 20, .55); }
     .status-label { display: block; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
     .status-value { display: block; overflow: hidden; margin-top: .15rem; text-overflow: ellipsis; white-space: nowrap; }
@@ -83,8 +86,8 @@
     .notice.ok { border-color: var(--good); color: var(--good); }
     .notice.error { border-color: var(--danger); color: var(--danger); }
     footer { margin-top: .7rem; font-size: .74rem; text-align: center; }
-    @media (max-width: 820px) { .layout { grid-template-columns: 1fr; } .camera-card { grid-row: auto; } }
-    @media (max-width: 520px) { .shell { padding-inline: .7rem; } header { display: block; } .strip { justify-content: flex-start; margin-top: .6rem; } .card { padding: .65rem; border-radius: 12px; } .button-row.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } .camera-frame, .camera-frame img { min-height: 180px; } }
+    @media (max-width: 820px) { .layout { grid-template-columns: 1fr; grid-template-areas: "camera" "mode" "controls" "debug"; } .status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 520px) { .shell { padding-inline: .7rem; } header { display: block; } .strip { justify-content: flex-start; margin-top: .6rem; } .card { padding: .65rem; border-radius: 12px; } .button-row.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .camera-frame, .camera-frame img { min-height: 180px; } }
   </style>
 </head>
 <body>
@@ -114,7 +117,7 @@
         <div class="button-row"><button id="camera-restart-button" type="button" data-i18n="restartCamera">Restart camera</button></div>
       </section>
 
-      <section class="card">
+      <section class="card mode-card">
         <div class="card-header"><h2 data-i18n="controlMode">Control mode</h2></div>
         <div class="mode-buttons">
           <button id="manual-button" type="button" data-i18n="takeControl">Take dashboard control</button>
@@ -123,7 +126,7 @@
         <div id="notice" class="notice" role="status" aria-live="polite" data-i18n="connectingNotice">Dashboard is connecting to the UNO Q.</div>
       </section>
 
-      <section class="card">
+      <section class="card controls-card">
         <div class="card-header"><h2 data-i18n="robotControls">Robot controls</h2></div>
         <div class="group">
           <div class="group-title" data-i18n="movementHold">Movement · hold to continue</div>
@@ -138,7 +141,7 @@
         <div class="group"><div class="group-title" data-i18n="camera">Camera</div><div class="button-row four"><button data-command="camera_up" type="button" data-i18n="cameraUp">Up</button><button data-command="camera_down" type="button" data-i18n="cameraDown">Down</button><button data-command="camera_neutral" type="button" data-i18n="neutral">Neutral</button><button data-command="camera_stop" type="button" data-i18n="stopScan">Stop scan</button></div></div>
       </section>
 
-      <section class="card">
+      <section class="card debug-card">
         <div class="card-header"><h2 data-i18n="status">Status</h2></div>
         <div class="status-grid">
           <div class="status-item"><span class="status-label" data-i18n="control">Control</span><span id="status-control" class="status-value">—</span></div>
@@ -147,6 +150,10 @@
           <div class="status-item"><span class="status-label" data-i18n="hand">Hand</span><span id="status-hand" class="status-value">—</span></div>
           <div class="status-item"><span class="status-label" data-i18n="lastCommand">Last command</span><span id="status-command" class="status-value">—</span></div>
           <div class="status-item"><span class="status-label" data-i18n="scan">Camera scan</span><span id="status-scan" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="cameraHealth">Camera feed</span><span id="status-camera" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="cameraRestarts">Camera restarts</span><span id="status-restarts" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="cameraRestartReason">Last restart</span><span id="status-restart-reason" class="status-value">—</span></div>
+          <div class="status-item"><span class="status-label" data-i18n="cameraPath">Camera device</span><span id="status-camera-path" class="status-value">—</span></div>
         </div>
         <p id="status-error" class="note" data-i18n="noErrors">No errors reported.</p>
       </section>
@@ -158,9 +165,9 @@
     (() => {
       const translations = {
         en: {
-          title: "RoboDog manual control", subtitle: "UNO Q dashboard · press and hold a movement button", switchLanguage: "Tiếng Việt", switchLanguageAria: "Switch to Vietnamese", connectionStatus: "Connection status", connecting: "Connecting", connected: "Connected", offline: "Offline", inUse: "In use", automatic: "Automatic", dashboard: "Dashboard", bluetooth: "Bluetooth", manual: "Manual", unknown: "Unknown", camera: "Camera", live: "Live", waiting: "Waiting", cameraLiveHint: "Live camera feed.", cameraWaitingHint: "Waiting for camera frames.", cameraAlt: "RoboDog camera feed", cameraNote: "The live camera feed is available on the same private LAN as the UNO Q.", restartCamera: "Restart camera", cameraRestartRequested: "Camera restart requested.", controlMode: "Control mode", takeControl: "Take dashboard control", returnAutomatic: "Return to automatic", connectingNotice: "Dashboard is connecting to the UNO Q.", dashboardControlActive: "Dashboard control is active.", automaticRestored: "Automatic control restored.", dashboardBusy: "Dashboard is currently in use by another device.", bluetoothOwns: "Bluetooth currently owns manual control.", acceptedCommand: "Accepted: {command}", requestFailed: "Request failed ({status})", robotControls: "Robot controls", movementHold: "Movement · hold to continue", forward: "Forward", turnLeft: "Turn left", stop: "STOP", turnRight: "Turn right", crabLeft: "Crab left", backward: "Backward", crabRight: "Crab right", posture: "Posture", stand: "Stand", sit: "Sit", prone: "Prone", holdPose: "Hold pose", actions: "Actions", pace: "Pace", bounce: "Bounce", wave: "Wave", jump: "Jump", cameraUp: "Up", cameraDown: "Down", neutral: "Neutral", stopScan: "Stop scan", status: "Status", control: "Control", robotState: "Robot state", face: "Face", hand: "Hand", lastCommand: "Last command", scan: "Camera scan", noErrors: "No errors reported.", detected: "Detected", notDetected: "Not detected", footer: "Keyboard: W/A/S/D move · E/F crab-step · Q/C/Z posture · Space stop · B backward alias" },
+          title: "RoboDog manual control", subtitle: "UNO Q dashboard · press and hold a movement button", switchLanguage: "Tiếng Việt", switchLanguageAria: "Switch to Vietnamese", connectionStatus: "Connection status", connecting: "Connecting", connected: "Connected", offline: "Offline", inUse: "In use", automatic: "Automatic", dashboard: "Dashboard", bluetooth: "Bluetooth", manual: "Manual", unknown: "Unknown", camera: "Camera", live: "Live", waiting: "Waiting", cameraLiveHint: "Live camera feed.", cameraWaitingHint: "Waiting for camera frames.", cameraAlt: "RoboDog camera feed", cameraNote: "The live camera feed is available on the same private LAN as the UNO Q.", restartCamera: "Restart camera", cameraRestartRequested: "Camera restart requested.", controlMode: "Control mode", takeControl: "Take dashboard control", returnAutomatic: "Return to automatic", connectingNotice: "Dashboard is connecting to the UNO Q.", dashboardControlActive: "Dashboard control is active.", automaticRestored: "Automatic control restored.", dashboardBusy: "Dashboard is currently in use by another device.", bluetoothOwns: "Bluetooth currently owns manual control.", acceptedCommand: "Accepted: {command}", requestFailed: "Request failed ({status})", robotControls: "Robot controls", movementHold: "Movement · hold to continue", forward: "Forward", turnLeft: "Turn left", stop: "STOP", turnRight: "Turn right", crabLeft: "Crab left", backward: "Backward", crabRight: "Crab right", posture: "Posture", stand: "Stand", sit: "Sit", prone: "Prone", holdPose: "Hold pose", actions: "Actions", pace: "Pace", bounce: "Bounce", wave: "Wave", jump: "Jump", cameraUp: "Up", cameraDown: "Down", neutral: "Neutral", stopScan: "Stop scan", status: "Status", control: "Control", robotState: "Robot state", face: "Face", hand: "Hand", lastCommand: "Last command", scan: "Camera scan", cameraHealth: "Camera feed", cameraRestarts: "Camera restarts", cameraRestartReason: "Last restart", cameraPath: "Camera device", noErrors: "No errors reported.", detected: "Detected", notDetected: "Not detected", footer: "Keyboard: W/A/S/D move · E/F crab-step · Q/C/Z posture · Space stop · B backward alias" },
         vi: {
-          title: "Điều khiển thủ công RoboDog", subtitle: "Bảng điều khiển UNO Q · nhấn giữ nút di chuyển", switchLanguage: "English", switchLanguageAria: "Chuyển sang tiếng Anh", connectionStatus: "Trạng thái kết nối", connecting: "Đang kết nối", connected: "Đã kết nối", offline: "Ngoại tuyến", inUse: "Đang được sử dụng", automatic: "Tự động", dashboard: "Bảng điều khiển", bluetooth: "Bluetooth", manual: "Thủ công", unknown: "Không rõ", camera: "Camera", live: "Trực tiếp", waiting: "Đang chờ", cameraLiveHint: "Luồng camera đang trực tiếp.", cameraWaitingHint: "Đang chờ khung hình camera.", cameraAlt: "Luồng camera RoboDog", cameraNote: "Luồng camera trực tiếp khả dụng trên cùng mạng riêng với UNO Q.", restartCamera: "Khởi động lại camera", cameraRestartRequested: "Đã yêu cầu khởi động lại camera.", controlMode: "Chế độ điều khiển", takeControl: "Nhận quyền điều khiển", returnAutomatic: "Trở về tự động", connectingNotice: "Bảng điều khiển đang kết nối với UNO Q.", dashboardControlActive: "Đã kích hoạt điều khiển bằng bảng.", automaticRestored: "Đã khôi phục điều khiển tự động.", dashboardBusy: "Bảng điều khiển đang được thiết bị khác sử dụng.", bluetoothOwns: "Bluetooth đang giữ quyền điều khiển thủ công.", acceptedCommand: "Đã nhận: {command}", requestFailed: "Yêu cầu thất bại ({status})", robotControls: "Điều khiển robot", movementHold: "Di chuyển · nhấn giữ để tiếp tục", forward: "Tiến", turnLeft: "Quay trái", stop: "DỪNG", turnRight: "Quay phải", crabLeft: "Ngang trái", backward: "Lùi", crabRight: "Ngang phải", posture: "Tư thế", stand: "Đứng", sit: "Ngồi", prone: "Nằm", holdPose: "Giữ tư thế", actions: "Hành động", pace: "Đi tuần", bounce: "Nhún", wave: "Vẫy", jump: "Nhảy", cameraUp: "Lên", cameraDown: "Xuống", neutral: "Trung tâm", stopScan: "Dừng quét", status: "Trạng thái", control: "Điều khiển", robotState: "Trạng thái robot", face: "Khuôn mặt", hand: "Bàn tay", lastCommand: "Lệnh cuối", scan: "Quét camera", noErrors: "Không có lỗi.", detected: "Đã phát hiện", notDetected: "Chưa phát hiện", footer: "Bàn phím: W/A/S/D di chuyển · E/F bước ngang · Q/C/Z tư thế · Space dừng · B lùi" }
+          title: "Điều khiển thủ công RoboDog", subtitle: "Bảng điều khiển UNO Q · nhấn giữ nút di chuyển", switchLanguage: "English", switchLanguageAria: "Chuyển sang tiếng Anh", connectionStatus: "Trạng thái kết nối", connecting: "Đang kết nối", connected: "Đã kết nối", offline: "Ngoại tuyến", inUse: "Đang được sử dụng", automatic: "Tự động", dashboard: "Bảng điều khiển", bluetooth: "Bluetooth", manual: "Thủ công", unknown: "Không rõ", camera: "Camera", live: "Trực tiếp", waiting: "Đang chờ", cameraLiveHint: "Luồng camera đang trực tiếp.", cameraWaitingHint: "Đang chờ khung hình camera.", cameraAlt: "Luồng camera RoboDog", cameraNote: "Luồng camera trực tiếp khả dụng trên cùng mạng riêng với UNO Q.", restartCamera: "Khởi động lại camera", cameraRestartRequested: "Đã yêu cầu khởi động lại camera.", controlMode: "Chế độ điều khiển", takeControl: "Nhận quyền điều khiển", returnAutomatic: "Trở về tự động", connectingNotice: "Bảng điều khiển đang kết nối với UNO Q.", dashboardControlActive: "Đã kích hoạt điều khiển bằng bảng.", automaticRestored: "Đã khôi phục điều khiển tự động.", dashboardBusy: "Bảng điều khiển đang được thiết bị khác sử dụng.", bluetoothOwns: "Bluetooth đang giữ quyền điều khiển thủ công.", acceptedCommand: "Đã nhận: {command}", requestFailed: "Yêu cầu thất bại ({status})", robotControls: "Điều khiển robot", movementHold: "Di chuyển · nhấn giữ để tiếp tục", forward: "Tiến", turnLeft: "Quay trái", stop: "DỪNG", turnRight: "Quay phải", crabLeft: "Ngang trái", backward: "Lùi", crabRight: "Ngang phải", posture: "Tư thế", stand: "Đứng", sit: "Ngồi", prone: "Nằm", holdPose: "Giữ tư thế", actions: "Hành động", pace: "Đi tuần", bounce: "Nhún", wave: "Vẫy", jump: "Nhảy", cameraUp: "Lên", cameraDown: "Xuống", neutral: "Trung tâm", stopScan: "Dừng quét", status: "Trạng thái", control: "Điều khiển", robotState: "Trạng thái robot", face: "Khuôn mặt", hand: "Bàn tay", lastCommand: "Lệnh cuối", scan: "Quét camera", cameraHealth: "Luồng camera", cameraRestarts: "Số lần khởi động lại", cameraRestartReason: "Lần khởi động cuối", cameraPath: "Thiết bị camera", noErrors: "Không có lỗi.", detected: "Đã phát hiện", notDetected: "Chưa phát hiện", footer: "Bàn phím: W/A/S/D di chuyển · E/F bước ngang · Q/C/Z tư thế · Space dừng · B lùi" }
       };
       const state = { status: null, holdButton: null, holdTimer: null, keyboardButton: null, language: null, released: false };
       const $ = (id) => document.getElementById(id);
@@ -183,7 +190,7 @@
         $("connection-pill").textContent = t("connected"); $("connection-pill").className = "pill good";
         $("mode-pill").textContent = formatControlMode(data.control_mode); $("mode-pill").className = `pill ${dashboardActive ? "good" : bluetoothActive ? "warning" : ""}`;
         const cameraLive = data.camera_live !== false; $("camera-state").textContent = cameraLive ? t("live") : t("waiting"); $("camera-state").className = `pill ${cameraLive ? "good" : ""}`; $("camera-hint").textContent = cameraLive ? t("cameraLiveHint") : t("cameraWaitingHint");
-        $("status-control").textContent = formatControlMode(data.control_mode); $("status-robot").textContent = data.robot_state || "—"; $("status-face").textContent = data.face_status || "—"; $("status-hand").textContent = data.hand_detected ? t("detected") : t("notDetected"); $("status-scan").textContent = data.camera_scan_state || "—";
+        $("status-control").textContent = formatControlMode(data.control_mode); $("status-robot").textContent = data.robot_state || "—"; $("status-face").textContent = data.face_status || "—"; $("status-hand").textContent = data.hand_detected ? t("detected") : t("notDetected"); $("status-scan").textContent = data.camera_scan_state || "—"; $("status-camera").textContent = cameraLive ? t("live") : t("waiting"); $("status-restarts").textContent = String(data.camera_restart_count ?? 0); $("status-restart-reason").textContent = data.camera_last_restart_reason || "—"; $("status-camera-path").textContent = data.camera_path || "—";
         $("status-command").textContent = data.last_command ? `${commandLabel(data.last_command)} · ${formatTime(data.last_command_at)}` : "—"; const statusError = data.last_error || data.camera_error; $("status-error").textContent = statusError || t("noErrors"); $("status-error").style.color = statusError ? "var(--danger)" : "";
         buttons().forEach((button) => { button.disabled = !dashboardActive; }); $("manual-button").disabled = dashboardActive || bluetoothActive; $("automatic-button").disabled = data.control_mode === "automatic";
         $("camera-restart-button").disabled = false;
