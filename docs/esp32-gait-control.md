@@ -173,8 +173,10 @@ nhận một tư thế mới, firmware lưu tọa độ chân đang được đi
 đồng thời cả bốn chân bằng hàm smoothstep trong không gian Descartes. Thời gian
 được tính theo chân phải di chuyển xa nhất (nhanh nhất 450 ms, tối đa 1,2 s),
 nên mọi cặp chuyển tư thế đều dùng chung một đường đi và lệnh mới giữa chừng có
-thể đổi hướng an toàn. Lệnh `j` và watchdog cũng dùng đường chuyển về tư thế
-đứng này khi kết thúc.
+thể đổi hướng an toàn. Khi rời tư thế ngồi (`q`), firmware chèn thêm một điểm
+trung gian dịch bàn chân `SIT_EXIT_COM_SHIFT_X` về phía sau trong hệ tọa độ thân,
+để đưa trọng tâm về trên hai chân trước trước khi duỗi chân sau. Lệnh `j` và
+watchdog cũng dùng đường chuyển về tư thế đứng này khi kết thúc.
 
 ## Đọc cảm biến MPU6050 để cân bằng
 

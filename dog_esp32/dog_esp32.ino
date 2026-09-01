@@ -118,14 +118,21 @@ constexpr unsigned long POSE_TRANSITION_MIN_MS = 450;
 constexpr unsigned long POSE_TRANSITION_MAX_MS = 1200;
 constexpr float POSE_TRANSITION_MS_PER_MM = 4.0f;
 constexpr float POSE_TRANSITION_EPSILON_MM = 0.5f;
+// In the sitting pose the robot's mass is behind the front-leg support.  A
+// negative body-frame X foot shift makes the body move forward over that
+// support before the folded rear legs are asked to extend.
+constexpr float SIT_EXIT_COM_SHIFT_X = -20.0f;
 
 FootTarget lastFootTarget[4] = {};
 FootTarget poseTransitionFrom[4] = {};
+FootTarget poseTransitionWaypoint[4] = {};
 FootTarget poseTransitionTo[4] = {};
 bool poseTransitionActive = false;
+bool poseTransitionHasWaypoint = false;
 char poseTransitionTarget = 's';
 unsigned long poseTransitionStartTime = 0;
 unsigned long poseTransitionDurationMs = 0;
+unsigned long poseTransitionWaypointDurationMs = 0;
 
 // =============================================================================
 // PID
@@ -391,6 +398,13 @@ float poseTransitionBlend(float normalized) {
   return normalized * normalized * (3.0f - 2.0f * normalized);
 }
 
+void interpolateFootTarget(const FootTarget &from, const FootTarget &to,
+                           float blend, FootTarget &out) {
+  out.x = from.x + (to.x - from.x) * blend;
+  out.y = from.y + (to.y - from.y) * blend;
+  out.z = from.z + (to.z - from.z) * blend;
+}
+
 void samplePoseTransition(unsigned long now, FootTarget *out) {
   if (!poseTransitionActive || poseTransitionDurationMs == 0) {
     for (int i = 0; i < 4; i++) out[i] = poseTransitionTo[i];
@@ -398,23 +412,44 @@ void samplePoseTransition(unsigned long now, FootTarget *out) {
   }
 
   const unsigned long elapsed = now - poseTransitionStartTime;
-  const float normalized = elapsed >= poseTransitionDurationMs
+  const bool firstSegment = poseTransitionHasWaypoint
+                            && elapsed < poseTransitionWaypointDurationMs;
+  const unsigned long segmentStart = firstSegment
+                                     ? 0
+                                     : poseTransitionWaypointDurationMs;
+  const unsigned long segmentDuration = firstSegment
+                                        ? poseTransitionWaypointDurationMs
+                                        : poseTransitionDurationMs - poseTransitionWaypointDurationMs;
+  const unsigned long segmentElapsed = elapsed <= segmentStart
+                                       ? 0
+                                       : elapsed - segmentStart;
+  const float normalized = segmentDuration == 0 || segmentElapsed >= segmentDuration
                              ? 1.0f
-                             : (float)elapsed / (float)poseTransitionDurationMs;
+                             : (float)segmentElapsed / (float)segmentDuration;
   const float blend = poseTransitionBlend(normalized);
 
   for (int i = 0; i < 4; i++) {
-    out[i].x = poseTransitionFrom[i].x
-              + (poseTransitionTo[i].x - poseTransitionFrom[i].x) * blend;
-    out[i].y = poseTransitionFrom[i].y
-              + (poseTransitionTo[i].y - poseTransitionFrom[i].y) * blend;
-    out[i].z = poseTransitionFrom[i].z
-              + (poseTransitionTo[i].z - poseTransitionFrom[i].z) * blend;
+    FootTarget from = poseTransitionFrom[i];
+    FootTarget to = poseTransitionTo[i];
+    if (poseTransitionHasWaypoint && !firstSegment) {
+      from = poseTransitionWaypoint[i];
+    } else if (poseTransitionHasWaypoint) {
+      to = poseTransitionWaypoint[i];
+    }
+    interpolateFootTarget(from, to, blend, out[i]);
   }
 }
 
-void beginPoseTransition(char targetPose, unsigned long now) {
+void beginPoseTransition(char targetPose, unsigned long now,
+                         char sourceStateOverride = '\0') {
   if (!isStaticPoseCommand(targetPose)) return;
+
+  const bool previousTransitionWasSit =
+    poseTransitionActive && poseTransitionTarget == 'q';
+  const char sourceState = sourceStateOverride != '\0'
+                             ? sourceStateOverride
+                             : currentState;
+  const bool startingFromSit = sourceState == 'q' || previousTransitionWasSit;
 
   FootTarget from[4];
   if (poseTransitionActive) {
@@ -425,37 +460,77 @@ void beginPoseTransition(char targetPose, unsigned long now) {
     for (int i = 0; i < 4; i++) from[i] = lastFootTarget[i];
   }
 
-  float maxDistance = 0.0f;
+  poseTransitionHasWaypoint = targetPose != 'q' && startingFromSit;
+  poseTransitionWaypointDurationMs = 0;
+  float firstSegmentDistance = 0.0f;
+  float secondSegmentDistance = 0.0f;
+  float directDistance = 0.0f;
   for (int i = 0; i < 4; i++) {
     FootTarget target;
     getStaticPoseTarget(targetPose, i, target);
     poseTransitionFrom[i] = from[i];
     poseTransitionTo[i] = target;
 
-    const float dx = target.x - from[i].x;
-    const float dy = target.y - from[i].y;
-    const float dz = target.z - from[i].z;
-    const float distance = sqrtf(dx * dx + dy * dy + dz * dz);
-    if (distance > maxDistance) maxDistance = distance;
+    const float directDx = target.x - from[i].x;
+    const float directDy = target.y - from[i].y;
+    const float directDz = target.z - from[i].z;
+    const float directLegDistance =
+      sqrtf(directDx * directDx + directDy * directDy + directDz * directDz);
+    if (directLegDistance > directDistance) directDistance = directLegDistance;
+
+    if (poseTransitionHasWaypoint) {
+      getStaticPoseTarget('q', i, poseTransitionWaypoint[i]);
+      poseTransitionWaypoint[i].x += SIT_EXIT_COM_SHIFT_X;
+
+      const float firstDx = poseTransitionWaypoint[i].x - from[i].x;
+      const float firstDy = poseTransitionWaypoint[i].y - from[i].y;
+      const float firstDz = poseTransitionWaypoint[i].z - from[i].z;
+      const float firstLegDistance =
+        sqrtf(firstDx * firstDx + firstDy * firstDy + firstDz * firstDz);
+      if (firstLegDistance > firstSegmentDistance)
+        firstSegmentDistance = firstLegDistance;
+
+      const float secondDx = target.x - poseTransitionWaypoint[i].x;
+      const float secondDy = target.y - poseTransitionWaypoint[i].y;
+      const float secondDz = target.z - poseTransitionWaypoint[i].z;
+      const float secondLegDistance =
+        sqrtf(secondDx * secondDx + secondDy * secondDy + secondDz * secondDz);
+      if (secondLegDistance > secondSegmentDistance)
+        secondSegmentDistance = secondLegDistance;
+    }
   }
 
   poseTransitionTarget = targetPose;
-  if (maxDistance <= POSE_TRANSITION_EPSILON_MM) {
+  const float pathDistance = poseTransitionHasWaypoint
+                               ? firstSegmentDistance + secondSegmentDistance
+                               : directDistance;
+  if (pathDistance <= POSE_TRANSITION_EPSILON_MM) {
     for (int i = 0; i < 4; i++) lastFootTarget[i] = poseTransitionTo[i];
     poseTransitionActive = false;
+    poseTransitionHasWaypoint = false;
     poseTransitionStartTime = now;
     poseTransitionDurationMs = 0;
+    poseTransitionWaypointDurationMs = 0;
     return;
   }
 
   float duration = (float)POSE_TRANSITION_MIN_MS
-                   + maxDistance * POSE_TRANSITION_MS_PER_MM;
+                   + pathDistance * POSE_TRANSITION_MS_PER_MM;
   if (duration > (float)POSE_TRANSITION_MAX_MS) duration = (float)POSE_TRANSITION_MAX_MS;
   poseTransitionDurationMs = (unsigned long)duration;
+  if (poseTransitionHasWaypoint) {
+    const float firstFraction = firstSegmentDistance / pathDistance;
+    poseTransitionWaypointDurationMs =
+      (unsigned long)(duration * firstFraction);
+    if (poseTransitionWaypointDurationMs == 0) poseTransitionWaypointDurationMs = 1;
+    if (poseTransitionWaypointDurationMs >= poseTransitionDurationMs)
+      poseTransitionWaypointDurationMs = poseTransitionDurationMs - 1;
+  }
   poseTransitionStartTime = now;
   poseTransitionActive = true;
-  Serial.printf("POSE_TRANSITION=%c duration=%lums distance=%.1fmm\n",
-                poseTransitionTarget, poseTransitionDurationMs, maxDistance);
+  Serial.printf("POSE_TRANSITION=%c duration=%lums distance=%.1fmm%s\n",
+                poseTransitionTarget, poseTransitionDurationMs, pathDistance,
+                poseTransitionHasWaypoint ? " sit-lean" : "");
 }
 
 enum CameraView : int8_t {
@@ -603,11 +678,12 @@ void setControlMode(ControlMode mode, bool notifyUnoQ) {
   cameraTiltMoving = false;
   stopCameraTiltServo();
   targetCameraView = currentCameraView;
+  const char previousState = currentState;
   currentState = 's';
   // Changing ownership is also a controlled stop: if a pose was halfway
   // through a transition, retarget it to stand rather than leaving the old
   // request running in the newly selected control mode.
-  beginPoseTransition('s', now);
+  beginPoseTransition('s', now, previousState);
   calibrationActive = false;
   lastMotionCommandTime = now;
   controlMode = mode;
@@ -844,6 +920,8 @@ void loop() {
       // will still start from lastFootTarget, so cancelling here cannot cause
       // a stale pose to be reused later.
       poseTransitionActive = false;
+      poseTransitionHasWaypoint = false;
+      poseTransitionWaypointDurationMs = 0;
     }
     currentState = command;
     lastMotionCommandTime = now;
