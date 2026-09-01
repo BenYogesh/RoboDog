@@ -107,6 +107,26 @@ struct JointAngles {  // Khởi tạo cấu trúc góc servo
 JointAngles lastValid[4] = {};               // Mảng lưu vị trí góc cuối cùng
 float coxaTrim[4] = { 0.0, 0.0, 0.0, 0.0 };  // Mảng tinh chỉnh góc hông FL, FR, BL, BR
 
+// Static poses are blended in foot space instead of changing every target in
+// one frame.  This keeps the transition reusable for every pair of supported
+// poses (stand, relaxed stand, sit, and prone) while still finishing quickly.
+struct FootTarget {
+  float x, y, z;
+};
+
+constexpr unsigned long POSE_TRANSITION_MIN_MS = 450;
+constexpr unsigned long POSE_TRANSITION_MAX_MS = 1200;
+constexpr float POSE_TRANSITION_MS_PER_MM = 4.0f;
+constexpr float POSE_TRANSITION_EPSILON_MM = 0.5f;
+
+FootTarget lastFootTarget[4] = {};
+FootTarget poseTransitionFrom[4] = {};
+FootTarget poseTransitionTo[4] = {};
+bool poseTransitionActive = false;
+char poseTransitionTarget = 's';
+unsigned long poseTransitionStartTime = 0;
+unsigned long poseTransitionDurationMs = 0;
+
 // =============================================================================
 // PID
 // =============================================================================
@@ -334,6 +354,110 @@ bool isSupportedCommand(char command) {
   }
 }
 
+bool isStaticPoseCommand(char command) {
+  return command == 's' || command == 'z' || command == 'q' || command == 'c';
+}
+
+void getStaticPoseTarget(char pose, int legIndex, FootTarget &target) {
+  // Default pose is the normal standing position.  'z' deliberately shares
+  // the same geometry; it only differs by disabling active balancing once the
+  // transition has completed.
+  target.x = 0.0f;
+  target.y = Lc;
+  target.z = zRest;
+
+  switch (pose) {
+    case 'c':  // prone
+      target.y = legs[legIndex].isRightSide ? Lc + 5.0f : Lc - 5.0f;
+      target.z = -80.0f;
+      break;
+    case 'q':  // sit
+      target.y = legs[legIndex].isFrontLeg
+                   ? Lc
+                   : (legs[legIndex].isRightSide ? Lc + 10.0f : Lc - 10.0f);
+      target.z = legs[legIndex].isFrontLeg ? zRest - 10.0f : -70.0f;
+      break;
+    default:
+      break;
+  }
+}
+
+float poseTransitionBlend(float normalized) {
+  if (normalized <= 0.0f) return 0.0f;
+  if (normalized >= 1.0f) return 1.0f;
+
+  // Cubic smoothstep limits the target velocity at both ends without adding
+  // the extra latency of a multi-stage servo sequence.
+  return normalized * normalized * (3.0f - 2.0f * normalized);
+}
+
+void samplePoseTransition(unsigned long now, FootTarget *out) {
+  if (!poseTransitionActive || poseTransitionDurationMs == 0) {
+    for (int i = 0; i < 4; i++) out[i] = poseTransitionTo[i];
+    return;
+  }
+
+  const unsigned long elapsed = now - poseTransitionStartTime;
+  const float normalized = elapsed >= poseTransitionDurationMs
+                             ? 1.0f
+                             : (float)elapsed / (float)poseTransitionDurationMs;
+  const float blend = poseTransitionBlend(normalized);
+
+  for (int i = 0; i < 4; i++) {
+    out[i].x = poseTransitionFrom[i].x
+              + (poseTransitionTo[i].x - poseTransitionFrom[i].x) * blend;
+    out[i].y = poseTransitionFrom[i].y
+              + (poseTransitionTo[i].y - poseTransitionFrom[i].y) * blend;
+    out[i].z = poseTransitionFrom[i].z
+              + (poseTransitionTo[i].z - poseTransitionFrom[i].z) * blend;
+  }
+}
+
+void beginPoseTransition(char targetPose, unsigned long now) {
+  if (!isStaticPoseCommand(targetPose)) return;
+
+  FootTarget from[4];
+  if (poseTransitionActive) {
+    // Retarget from the pose that is actually on its way, not from the stale
+    // pose that was requested first.  This makes q->c->s safe and universal.
+    samplePoseTransition(now, from);
+  } else {
+    for (int i = 0; i < 4; i++) from[i] = lastFootTarget[i];
+  }
+
+  float maxDistance = 0.0f;
+  for (int i = 0; i < 4; i++) {
+    FootTarget target;
+    getStaticPoseTarget(targetPose, i, target);
+    poseTransitionFrom[i] = from[i];
+    poseTransitionTo[i] = target;
+
+    const float dx = target.x - from[i].x;
+    const float dy = target.y - from[i].y;
+    const float dz = target.z - from[i].z;
+    const float distance = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (distance > maxDistance) maxDistance = distance;
+  }
+
+  poseTransitionTarget = targetPose;
+  if (maxDistance <= POSE_TRANSITION_EPSILON_MM) {
+    for (int i = 0; i < 4; i++) lastFootTarget[i] = poseTransitionTo[i];
+    poseTransitionActive = false;
+    poseTransitionStartTime = now;
+    poseTransitionDurationMs = 0;
+    return;
+  }
+
+  float duration = (float)POSE_TRANSITION_MIN_MS
+                   + maxDistance * POSE_TRANSITION_MS_PER_MM;
+  if (duration > (float)POSE_TRANSITION_MAX_MS) duration = (float)POSE_TRANSITION_MAX_MS;
+  poseTransitionDurationMs = (unsigned long)duration;
+  poseTransitionStartTime = now;
+  poseTransitionActive = true;
+  Serial.printf("POSE_TRANSITION=%c duration=%lums distance=%.1fmm\n",
+                poseTransitionTarget, poseTransitionDurationMs, maxDistance);
+}
+
 enum CameraView : int8_t {
   CAMERA_VIEW_DOWN = -1,
   CAMERA_VIEW_NEUTRAL = 0,
@@ -480,6 +604,10 @@ void setControlMode(ControlMode mode, bool notifyUnoQ) {
   stopCameraTiltServo();
   targetCameraView = currentCameraView;
   currentState = 's';
+  // Changing ownership is also a controlled stop: if a pose was halfway
+  // through a transition, retarget it to stand rather than leaving the old
+  // request running in the newly selected control mode.
+  beginPoseTransition('s', now);
   calibrationActive = false;
   lastMotionCommandTime = now;
   controlMode = mode;
@@ -608,6 +736,10 @@ void setup() {
 
   // Khởi tạo các chân
   for (int i = 0; i < 4; i++) {
+    lastFootTarget[i].x = 0.0f;
+    lastFootTarget[i].y = Lc;
+    lastFootTarget[i].z = zRest;
+
     JointAngles p;
     if (calculateIK_Mammal(0.0f, Lc, zRest, p)) {
       lastValid[i] = p;
@@ -705,6 +837,14 @@ void loop() {
   if (isCameraCommand(command)) {
     requestCameraView(command, now);
   } else if (isSupportedCommand(command)) {
+    if (isStaticPoseCommand(command)) {
+      beginPoseTransition(command, now);
+    } else {
+      // A gait/action owns the target trajectory.  The next static command
+      // will still start from lastFootTarget, so cancelling here cannot cause
+      // a stale pose to be reused later.
+      poseTransitionActive = false;
+    }
     currentState = command;
     lastMotionCommandTime = now;
     if (command == 'j') jumpStartTime = now;
@@ -718,7 +858,16 @@ void loop() {
 
   if (isMotionState(currentState) && currentTime - lastMotionCommandTime > MOTION_COMMAND_TIMEOUT_MS) {
     currentState = 's';
+    beginPoseTransition('s', currentTime);
     Serial.println("Motion command timeout; stopping.");
+  }
+
+  // The jump action has a fixed three-phase timeline.  Return to the standing
+  // target through the same generic transition layer instead of snapping when
+  // the action finishes.
+  if (currentState == 'j' && currentTime - jumpStartTime >= 300) {
+    currentState = 's';
+    beginPoseTransition('s', currentTime);
   }
 
   if (currentState == 'k') {
@@ -732,11 +881,21 @@ void loop() {
     float dt = (float)(currentTime - lastIMUTime) * (1.0f / 1000.0f);
     lastIMUTime = currentTime;
     updateAttitude(dt);
-    if (currentState != 'z') updateBalancing(anglePitch, angleRoll, dt);
+    if (currentState != 'z' || poseTransitionActive)
+      updateBalancing(anglePitch, angleRoll, dt);
   }
 
   float elapsed_norm = (float)elapsed * invCycleDuration;
   syncCount = 0;
+
+  FootTarget transitionTargets[4];
+  const bool transitionFrame = poseTransitionActive;
+  if (transitionFrame) {
+    samplePoseTransition(currentTime, transitionTargets);
+    if (currentTime - poseTransitionStartTime >= poseTransitionDurationMs) {
+      poseTransitionActive = false;
+    }
+  }
 
   // Chạy liên tục từng chân
   for (int i = 0; i < 4; i++) {
@@ -747,7 +906,13 @@ void loop() {
     // -------------------------------------------------------------------------
     // Xử lý theo tư thế
     // -------------------------------------------------------------------------
-    switch (currentState) {
+    if (transitionFrame) {
+      // All legs follow the same normalized blend.  Their individual target
+      // coordinates preserve support while each pose is reached smoothly.
+      x = transitionTargets[i].x;
+      y = transitionTargets[i].y;
+      z = transitionTargets[i].z;
+    } else switch (currentState) {
       // Bước tiến
       case 'w':
       case 'a':
@@ -845,8 +1010,10 @@ void loop() {
           else if (jumpElapsed < 200) z = -200.0f;  // phase 2: nâng lên nhanh
           else if (jumpElapsed < 300) z = -110.0f;  // phase 3: đứng
           else {
-            currentState = 's';
-            continue;
+            // The loop-level completion check above normally handles this
+            // branch.  Keep a valid standing target here as a race-safe
+            // fallback if millis() rolls over between checks.
+            z = zRest;
           }
           break;
         }
@@ -911,9 +1078,15 @@ void loop() {
 
     }  // hết xử lý tư thế
 
+    // Keep the uncorrected Cartesian target so the next pose transition starts
+    // at the position commanded on the previous frame.
+    lastFootTarget[i].x = x;
+    lastFootTarget[i].y = y;
+    lastFootTarget[i].z = z;
+
     // Đẩy kết quả đọc cảm biến vào tọa độ
     float finalX, finalY, finalZ;  // Kết quả cuối cùng của tọa độ
-    if (currentState == 'z') {
+    if (currentState == 'z' && !transitionFrame) {
       finalX = x;
       finalY = y;
       finalZ = z;

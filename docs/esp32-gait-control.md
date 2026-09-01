@@ -166,6 +166,16 @@ Danh sách lệnh có trên ESP32
 
 Các lệnh di chuyển sẽ có giới hạn thời gian. Nếu không có lệnh mới trong khoảng `MOTION_COMMAND_TIMEOUT_MS`, ESP32 gửi lệnh `s` để dừng robot lại.
 
+### Chuyển tư thế
+
+Các tư thế tĩnh (`s`, `z`, `q`, `c`) không đổi mục tiêu chân ngay lập tức. Khi
+nhận một tư thế mới, firmware lưu tọa độ chân đang được điều khiển rồi nội suy
+đồng thời cả bốn chân bằng hàm smoothstep trong không gian Descartes. Thời gian
+được tính theo chân phải di chuyển xa nhất (nhanh nhất 450 ms, tối đa 1,2 s),
+nên mọi cặp chuyển tư thế đều dùng chung một đường đi và lệnh mới giữa chừng có
+thể đổi hướng an toàn. Lệnh `j` và watchdog cũng dùng đường chuyển về tư thế
+đứng này khi kết thúc.
+
 ## Đọc cảm biến MPU6050 để cân bằng
 
 ESP32 đọc cảm biến qua chân GPIO 21/22 để lấy các góc nghiêng theo chiều song song với mặt đất thông qua một bộ lọc, sau đó 4 bộ PIDs sẽ điều chỉnh sai số cho thân robot.
