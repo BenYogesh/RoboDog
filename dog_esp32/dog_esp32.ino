@@ -26,16 +26,12 @@ Servo cameraTiltServo;
 
 #define CAMERA_SERVO_PIN 27 // Servo quay camera
 constexpr int CAMERA_SERVO_STOP_US = 1500;
-// The replacement camera mechanism reverses the old motion direction. Keep
-// the pulse offsets close to neutral so its faster drive moves at a usable
-// scan speed; tune them in 5–10 microsecond steps if the mechanism needs it.
 constexpr int CAMERA_SERVO_UP_US = 1440;
 constexpr int CAMERA_SERVO_DOWN_US = 1560;
 constexpr unsigned long CAMERA_TILT_STEP_MS = 100;
 constexpr unsigned long CAMERA_SCAN_MAX_MS = 500;
-#define BOOT_GRACE_PERIOD_MS 7000  // ignore serial input right after power-up, \
-                                   // when boot-time noise/log text is most \
-                                   // likely to appear on the line
+#define BOOT_GRACE_PERIOD_MS 7000  // Thời gian đợi Uno Q khởi động
+
 String unoFrame;
 bool unoFrameOverflow = false;
 unsigned long lastBluetoothCommandTime = 0;
@@ -80,10 +76,10 @@ constexpr float BEZ_Z2 = zRest + stepHeight;            // Tọa độ z điểm
 constexpr float BEZ_Z3 = zRest;                         // Tọa độ z điểm 3
 
 // Tọa độ y để tính toán quỹ đạo khi bước ngang
-constexpr float BEZ_CY0 = -(crabStep / 2.0f);          // -15
-constexpr float BEZ_CY1 = -(crabStep / 2.0f) - 15.0f;  // -30 (kick away from landing side)
-constexpr float BEZ_CY2 = (crabStep / 2.0f) + 15.0f;   // +30 (lunge toward landing)
-constexpr float BEZ_CY3 = (crabStep / 2.0f);           //  +15
+constexpr float BEZ_CY0 = -(crabStep / 2.0f);          
+constexpr float BEZ_CY1 = -(crabStep / 2.0f) - 15.0f;  
+constexpr float BEZ_CY2 = (crabStep / 2.0f) + 15.0f;   
+constexpr float BEZ_CY3 = (crabStep / 2.0f);           
 
 // =============================================================================
 // CẤU TRÚC CHÂN
@@ -110,29 +106,20 @@ struct JointAngles {  // Khởi tạo cấu trúc góc servo
 JointAngles lastValid[4] = {};               // Mảng lưu vị trí góc cuối cùng
 float coxaTrim[4] = { 0.0, 0.0, 0.0, 0.0 };  // Mảng tinh chỉnh góc hông FL, FR, BL, BR
 
-// Static poses are blended in foot space instead of changing every target in
-// one frame.  This keeps the transition reusable for every pair of supported
-// poses (stand, relaxed stand, sit, and prone) while still finishing quickly.
 struct FootTarget {
   float x, y, z;
 };
 
-constexpr unsigned long POSE_TRANSITION_MIN_MS = 450;
-constexpr unsigned long POSE_TRANSITION_MAX_MS = 1200;
-constexpr float POSE_TRANSITION_MS_PER_MM = 4.0f;
+// Hằng số sử dụng để chuyển đổi giữa các tư thế
+constexpr unsigned long POSE_TRANSITION_MIN_MS = 450;   
+constexpr unsigned long POSE_TRANSITION_MAX_MS = 1200;  
+constexpr float POSE_TRANSITION_MS_PER_MM = 4.0f;        
 constexpr float POSE_TRANSITION_EPSILON_MM = 0.5f;
-// In the sitting pose the robot's mass is behind the front-leg support.  A
-// negative body-frame X foot shift makes the body move forward over that
-// support before the folded rear legs are asked to extend.
+// Chuyển đổi từ tư thế ngồi cần thêm biến
 constexpr float SIT_EXIT_COM_SHIFT_X = -30.0f;
-// For a sit -> stand transition, lower the rear feet part-way first.  This
-// gives the rear tibias a loaded push-up waypoint instead of asking them to
-// make the whole 80 mm extension in one blend.
 constexpr float SIT_EXIT_REAR_PUSH_Z = -120.0f;
 constexpr unsigned long SIT_EXIT_MIN_MS = 800;
 constexpr unsigned long SIT_EXIT_MAX_MS = 1600;
-// Let the transition own the exact foot trajectory; a small balance correction
-// remains available without allowing the IMU loop to cancel the lift.
 constexpr float POSE_TRANSITION_BALANCE_SCALE = 0.25f;
 
 FootTarget lastFootTarget[4] = {};
@@ -160,8 +147,7 @@ public:
     float omega = 2.0f * PI * cutoffFreq / sampleFreq;
     float sn = sin(omega);
     float cs = cos(omega);
-    float alpha = sn / (2.0f * 0.707f);  // 0.707 is the Butterworth Q-factor
-
+    float alpha = sn / (2.0f * 0.707f);  
     float a0 = 1.0f + alpha;
     b0 = (1.0f - cs) / 2.0f / a0;
     b1 = (1.0f - cs) / a0;
@@ -284,21 +270,20 @@ unsigned long lastTelemetryTime = 0;
 bool servoTelemetryEnabled = ENABLE_SERVO_TELEMETRY;
 uint8_t consecutiveTelemetryFailures = 0;
 
+// Chuẩn bị gói tin để gửi tới chuỗi servo
 void prepareST3215(int servoID, float angleDegrees, float dirMult) {
   angleDegrees *= dirMult;
   int pos = constrain(2048 + (int)roundf(angleDegrees * 11.377f), 0, 4095);
   syncIDs[syncCount] = (u8)servoID;
   syncPositions[syncCount] = (s16)pos;
-  // Static pose changes are load-bearing, especially while the rear tibias
-  // unfold from sitting.  A lower speed and bounded acceleration gives those
-  // joints more time to produce torque and reduces current spikes without
-  // changing the normal gait speed.
+  // Nếu đang chuyển đổi giữa các tư thế, quay chậm lại để có thêm lực
   if (poseTransitionActive) {
     syncSpeeds[syncCount] = servoID >= 9
                               ? POSE_TRANSITION_TIBIA_SPEED
                               : POSE_TRANSITION_SERVO_SPEED;
     syncAccels[syncCount] = POSE_TRANSITION_SERVO_ACCEL;
   } else {
+    // Còn không thì quay bình thường
     syncSpeeds[syncCount] = NORMAL_SERVO_SPEED;
     syncAccels[syncCount] = 0;
   }
@@ -308,16 +293,12 @@ void prepareST3215(int servoID, float angleDegrees, float dirMult) {
   syncCount++;
 }
 
+// Đọc tín hiệu trạng thái từ servo
 void updateServoTelemetry(unsigned long now) {
   if (!servoTelemetryEnabled || now - lastTelemetryTime < SERVO_TELEMETRY_INTERVAL_MS) return;
   lastTelemetryTime = now;
-
   const uint8_t servoID = nextTelemetryServoID;
   nextTelemetryServoID = (nextTelemetryServoID % SERVO_COUNT) + 1;
-
-  // FeedBack reads all status registers in one bus transaction. Passing -1 to
-  // the Read* functions below uses that cached response rather than issuing
-  // additional requests.
   if (st.FeedBack(servoID) < 0) {
     Serial.printf("[STS %u] feedback timeout\n", servoID);
     if (++consecutiveTelemetryFailures >= 3) {
@@ -393,9 +374,6 @@ bool isStaticPoseCommand(char command) {
 }
 
 void getStaticPoseTarget(char pose, int legIndex, FootTarget &target) {
-  // Default pose is the normal standing position.  'z' deliberately shares
-  // the same geometry; it only differs by disabling active balancing once the
-  // transition has completed.
   target.x = 0.0f;
   target.y = Lc;
   target.z = zRest;
@@ -416,12 +394,10 @@ void getStaticPoseTarget(char pose, int legIndex, FootTarget &target) {
   }
 }
 
+// Các hàm hỗ trợ tính tọa độ khi chuyển đổi giữa các tư thế
 float poseTransitionBlend(float normalized) {
   if (normalized <= 0.0f) return 0.0f;
   if (normalized >= 1.0f) return 1.0f;
-
-  // Cubic smoothstep limits the target velocity at both ends without adding
-  // the extra latency of a multi-stage servo sequence.
   return normalized * normalized * (3.0f - 2.0f * normalized);
 }
 
@@ -480,8 +456,6 @@ void beginPoseTransition(char targetPose, unsigned long now,
 
   FootTarget from[4];
   if (poseTransitionActive) {
-    // Retarget from the pose that is actually on its way, not from the stale
-    // pose that was requested first.  This makes q->c->s safe and universal.
     samplePoseTransition(now, from);
   } else {
     for (int i = 0; i < 4; i++) from[i] = lastFootTarget[i];
@@ -937,8 +911,6 @@ void loop() {
   }
 
   if (now >= BOOT_GRACE_PERIOD_MS) {
-    // Uno Q motion is blocked in manual mode and during the existing
-    // Bluetooth priority window.
     const bool allowUnoMotion =
       controlMode == CONTROL_AUTOMATIC &&
       now - lastBluetoothCommandTime > BLUETOOTH_PRIORITY_MS;
@@ -954,9 +926,6 @@ void loop() {
     if (isStaticPoseCommand(command)) {
       beginPoseTransition(command, now);
     } else {
-      // A gait/action owns the target trajectory.  The next static command
-      // will still start from lastFootTarget, so cancelling here cannot cause
-      // a stale pose to be reused later.
       poseTransitionActive = false;
       poseTransitionHasWaypoint = false;
       poseTransitionWaypointDurationMs = 0;
@@ -1023,8 +992,7 @@ void loop() {
     // Xử lý theo tư thế
     // -------------------------------------------------------------------------
     if (transitionFrame) {
-      // All legs follow the same normalized blend.  Their individual target
-      // coordinates preserve support while each pose is reached smoothly.
+      // Khi đang chuyển đổi giữa các tư thế, sử dụng tọa độ chuẩn hóa tính riêng
       x = transitionTargets[i].x;
       y = transitionTargets[i].y;
       z = transitionTargets[i].z;
@@ -1126,9 +1094,6 @@ void loop() {
           else if (jumpElapsed < 200) z = -200.0f;  // phase 2: nâng lên nhanh
           else if (jumpElapsed < 300) z = -110.0f;  // phase 3: đứng
           else {
-            // The loop-level completion check above normally handles this
-            // branch.  Keep a valid standing target here as a race-safe
-            // fallback if millis() rolls over between checks.
             z = zRest;
           }
           break;
@@ -1153,27 +1118,19 @@ void loop() {
           x = 0.0f;
           // Về cơ bản là giống bước thẳng, nhưng tính toán theo tọa độ y chứ không phải tọa độ x
           if (cp < swingDuration) {
-            // --- SWING: foot steps laterally to the new position ---
             float t = cp / swingDuration;
             float u = 1.0f - t;
             float uu = u * u;
             float uuu = uu * u;
             float tt = t * t;
             float ttt = tt * t;
-
-            // Bezier in Y, with the same kick-and-lunge shape as forward walking.
-            // sign flips the whole arc so both directions use the same constants.
             float yOffset = uuu * BEZ_CY0 + 3.0f * uu * t * BEZ_CY1
                             + 3.0f * u * tt * BEZ_CY2 + ttt * BEZ_CY3;
-
             y = Lc + sign * yOffset;
             z = uuu * BEZ_Z0 + 3.0f * uu * t * BEZ_Z1 + 3.0f * u * tt * BEZ_Z2 + ttt * BEZ_Z3;
             isStance = false;
 
           } else {
-            // --- STANCE: foot drags laterally, pushing the body sideways ---
-            // For crab right: foot drags from Lc+15 → Lc-15 (left in body frame)
-            // The body moves right over the planted feet.
             float t = (cp - swingDuration) / stanceDuration;
             y = Lc + sign * ((crabStep / 2.0f) - crabStep * t);
             z = zRest;
@@ -1194,8 +1151,6 @@ void loop() {
 
     }  // hết xử lý tư thế
 
-    // Keep the uncorrected Cartesian target so the next pose transition starts
-    // at the position commanded on the previous frame.
     lastFootTarget[i].x = x;
     lastFootTarget[i].y = y;
     lastFootTarget[i].z = z;
