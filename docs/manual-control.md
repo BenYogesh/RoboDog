@@ -25,13 +25,14 @@ The dashboard provides:
 - live webcam video at `/camera.mjpg`;
 - a button to take or release dashboard control;
 - press-and-hold movement controls with a stop-on-release safeguard;
-- combined posture/action controls for Stand, Sit, Prone, Hold pose, and Bounce;
-- Up/Down camera tilt controls (camera scanning is disabled during manual mode);
+- combined **Postures** controls for Stand, Sit, Prone, Hold, and Bounce;
+- grouped Up/Down camera tilt and **Restart camera** controls (camera scanning is
+  disabled during manual mode);
 - a compact face and hand detection strip above the live feed;
-- a **Restart camera** action for recovering from a USB power dip;
-- keyboard shortcuts: `W/A/S/D` move, `E/F` crab-step, `Q` sit, `C` prone,
-  `Z` hold, and `Space` stops; `B` remains a backward alias (`S` and `B` both
-  send the backend `b` command);
+- visible PC key hints on the movement, posture, and camera tilt controls;
+- keyboard shortcuts: `W/A/S/D` move, `Q/E` strafe, `X` stand, `C` sit,
+  `V` prone, `Z` hold, `B` bounce, `I/K` camera tilt, and `Space` stops
+  (`S` still sends the backend `b` command for backward motion);
 - bilingual English/Vietnamese labels and live control status.
 
 Only one dashboard device is allowed at a time. The server identifies a device
@@ -87,5 +88,6 @@ movement stops when Bluetooth commands stop arriving.
 6. Send Bluetooth `O`, then use **Take dashboard control**. Test movement only
    with the robot lifted or in a clear, supervised area; release a movement
    button and confirm it sends stop.
-7. Confirm the dashboard's face/hand strip updates above the live feed. Press
-   **Return to automatic**, then verify automatic vision behavior resumes.
+7. Confirm the dashboard's face/hand strip updates above the live feed and
+   verify the PC key hints trigger their matching controls. Press **Return to
+   automatic**, then verify automatic vision behavior resumes.
