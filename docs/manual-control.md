@@ -23,8 +23,8 @@ http://<uno-q-ip>:8080/
 The dashboard provides:
 
 - live webcam video at `/camera.mjpg`;
-- a button to take or release dashboard control;
-- press-and-hold movement controls with a stop-on-release safeguard;
+- **Manual** and **Automatic** control-mode buttons;
+- **Press & Hold** movement controls with a stop-on-release safeguard;
 - combined **Postures** controls for Stand, Sit, Prone, Hold, and Bounce;
 - grouped Up/Down camera tilt and **Restart camera** controls (camera scanning is
   disabled during manual mode);
@@ -43,7 +43,7 @@ The lease can be changed with `MANUAL_DASHBOARD_LEASE_S` (minimum 5 seconds).
 The listener has no authentication or encryption, so keep it on a trusted
 private LAN or behind a VPN/firewall.
 
-The dashboard's **Take dashboard control** action pauses Python autonomy while
+The dashboard's **Manual** action pauses Python autonomy while
 leaving the ESP32 in its UART-accepting automatic mode. Browser commands are
 then sent as the same framed `CMD:<character>` messages used by the UNO Q.
 If Bluetooth sends `M` while the dashboard is open, Bluetooth takes ownership;
@@ -87,10 +87,10 @@ movement stops when Bluetooth commands stop arriving.
    `MANUAL_VIDEO_ACTIVE`, and automatic movement decisions stop.
 5. Open `http://<uno-q-ip>:8080/` and confirm the webcam is live. The browser
    movement buttons remain disabled while Bluetooth owns the robot.
-6. Send Bluetooth `O`, then use **Take dashboard control**. Test movement only
+6. Send Bluetooth `O`, then use **Manual**. Test movement only
    with the robot lifted or in a clear, supervised area; release a movement
    button and confirm it sends stop.
 7. Enter ball mode with a fist gesture and confirm the dashboard shows the ball
    status plus detected object candidates. Confirm the face/hand strip still
    updates and the PC key hints trigger their matching controls. Press
-   **Return to automatic**, then verify automatic vision behavior resumes.
+   **Automatic**, then verify automatic vision behavior resumes.

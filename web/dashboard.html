@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#e8741a">
-  <title id="page-title">RoboDog manual control</title>
+  <title id="page-title">RoboDog</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #130b06;
-      --panel: #24150c;
-      --panel-light: #382014;
-      --border: #704022;
-      --text: #fff4e8;
-      --muted: #d3b69e;
-      --accent: #ff9c3d;
+      --bg: #1b0d05;
+      --panel: #3a1b0c;
+      --panel-light: #572710;
+      --border: #a9571f;
+      --text: #fff8f0;
+      --muted: #f0c7a2;
+      --accent: #ff9d36;
       --good: #54d69a;
       --warning: #ffc857;
       --danger: #ff6b6b;
@@ -24,7 +24,7 @@
     body {
       margin: 0;
       min-height: 100vh;
-      background: radial-gradient(circle at 15% 0%, rgba(255, 156, 61, .18), transparent 34rem), var(--bg);
+      background: radial-gradient(circle at 12% 0%, rgba(255, 145, 38, .34), transparent 32rem), radial-gradient(circle at 100% 20%, rgba(229, 81, 18, .18), transparent 30rem), linear-gradient(145deg, #2a1005 0%, var(--bg) 55%, #120601 100%);
       color: var(--text);
       font: 15px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
@@ -42,15 +42,13 @@
       user-select: none;
     }
     button:hover:not(:disabled) { border-color: var(--accent); }
-    button:active:not(:disabled), button.active:not(:disabled) { background: #5c2d10; transform: translateY(1px) scale(.98); }
+    button:active:not(:disabled), button.active:not(:disabled) { background: #8b350b; transform: translateY(1px) scale(.98); }
     button:disabled { cursor: not-allowed; opacity: .42; }
     .shell { width: min(1180px, 100%); margin: 0 auto; padding: max(.7rem, env(safe-area-inset-top)) .75rem 1.25rem; }
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem; margin-bottom: .7rem; }
     h1, h2, p { margin: 0; }
     h1 { font-size: clamp(1.5rem, 4vw, 2rem); letter-spacing: -.03em; }
     h2 { font-size: 1.05rem; }
-    .subtitle, .note { color: var(--muted); }
-    .subtitle { margin-top: .25rem; }
     .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .55rem; }
     .language { min-height: 38px; padding: .45rem .7rem; background: transparent; color: var(--accent); font-size: .8rem; }
     .strip { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .45rem; }
@@ -59,30 +57,29 @@
     .pill.warning { color: var(--warning); border-color: rgba(255, 200, 87, .48); }
     .pill.danger { color: var(--danger); border-color: rgba(255, 107, 107, .48); }
     .layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); grid-template-areas: "camera mode" "camera controls"; gap: .7rem; align-items: stretch; }
-    .card { border: 1px solid var(--border); border-radius: 14px; padding: .7rem; background: rgba(36, 21, 12, .96); box-shadow: 0 12px 30px rgba(76, 30, 0, .3); }
+    .card { border: 1px solid var(--border); border-radius: 14px; padding: .7rem; background: rgba(58, 27, 12, .96); box-shadow: 0 12px 30px rgba(255, 105, 0, .22); }
     .camera-card { grid-area: camera; }
     .mode-card { grid-area: mode; }
     .controls-card { grid-area: controls; }
     .card-header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
     .detection-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; margin-bottom: .5rem; }
-    .detection-item { display: flex; align-items: center; justify-content: space-between; gap: .5rem; min-width: 0; padding: .4rem .55rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(56, 32, 20, .55); }
+    .detection-item { display: flex; align-items: center; justify-content: space-between; gap: .5rem; min-width: 0; padding: .4rem .55rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(92, 40, 14, .58); }
     .detection-label { color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
     .detection-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 750; }
     .detection-value.good { color: var(--good); }
     .detection-value.warning { color: var(--warning); }
-    .ball-detection-panel { margin-bottom: .5rem; padding: .45rem .55rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(56, 32, 20, .55); }
+    .ball-detection-panel { margin-bottom: .5rem; padding: .45rem .55rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(92, 40, 14, .58); }
     .ball-detection-header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
     .ball-detection-objects-label { margin-top: .35rem; color: var(--muted); font-size: .68rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
     .ball-detection-objects { display: flex; flex-wrap: wrap; gap: .3rem; min-height: 1.35rem; margin-top: .25rem; }
-    .object-chip { display: inline-flex; align-items: baseline; gap: .28rem; padding: .2rem .38rem; border: 1px solid rgba(255, 156, 61, .35); border-radius: 5px; background: rgba(19, 11, 6, .65); font-size: .75rem; font-weight: 650; }
+    .object-chip { display: inline-flex; align-items: baseline; gap: .28rem; padding: .2rem .38rem; border: 1px solid rgba(255, 171, 72, .5); border-radius: 5px; background: rgba(29, 10, 2, .72); font-size: .75rem; font-weight: 650; }
     .object-confidence { color: var(--muted); font: 650 .67rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .object-empty { color: var(--muted); font-size: .75rem; }
-    .camera-frame { position: relative; overflow: hidden; min-height: 220px; aspect-ratio: 4 / 3; border: 1px solid var(--border); border-radius: 12px; background: #0c0805; }
+    .camera-frame { position: relative; overflow: hidden; min-height: 220px; aspect-ratio: 4 / 3; border: 1px solid var(--border); border-radius: 12px; background: #100703; }
     .camera-frame img { display: block; width: 100%; height: 100%; min-height: 220px; object-fit: contain; }
-    .camera-hint { position: absolute; inset: auto 0 0; padding: .5rem; background: linear-gradient(transparent, rgba(12, 8, 5, .94)); color: var(--muted); font-size: .78rem; }
-    .note { margin-top: .5rem; font-size: .78rem; }
+    .camera-hint { position: absolute; inset: auto 0 0; padding: .5rem; background: linear-gradient(transparent, rgba(16, 7, 3, .94)); color: var(--muted); font-size: .78rem; }
     .mode-buttons, .button-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
-    .mode-buttons button:first-child { background: #e8741a; border-color: #ffbd73; }
+    .mode-buttons button:first-child { background: #f47b16; border-color: #ffd08a; }
     .dpad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; max-width: 340px; margin: 0 auto; }
     .dpad .empty { visibility: hidden; }
     .dpad button { min-height: 50px; }
@@ -95,7 +92,7 @@
     .group-title { margin-bottom: .4rem; color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
     .button-row.posture-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .button-row.camera-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .notice { min-height: 2.2rem; margin-top: .6rem; padding: .5rem .6rem; border-left: 3px solid var(--accent); border-radius: 8px; background: rgba(255, 156, 61, .1); color: var(--muted); font-size: .8rem; }
+    .notice { min-height: 2.2rem; margin-top: .6rem; padding: .5rem .6rem; border-left: 3px solid var(--accent); border-radius: 8px; background: rgba(255, 145, 40, .15); color: var(--muted); font-size: .8rem; }
     .notice.ok { border-color: var(--good); color: var(--good); }
     .notice.error { border-color: var(--danger); color: var(--danger); }
     @media (max-width: 820px) { .layout { grid-template-columns: 1fr; grid-template-areas: "camera" "mode" "controls"; } }
@@ -106,8 +103,7 @@
   <div class="shell">
     <header>
       <div>
-        <h1 data-i18n="title">RoboDog manual control</h1>
-        <p class="subtitle" data-i18n="subtitle">UNO Q dashboard · press and hold a movement button</p>
+        <h1 data-i18n="title">RoboDog</h1>
       </div>
       <div class="actions">
         <button id="language-button" class="language" type="button">Tiếng Việt</button>
@@ -134,14 +130,13 @@
           <img id="camera-image" src="/camera.mjpg" alt="RoboDog camera feed">
           <div id="camera-hint" class="camera-hint" data-i18n="cameraLiveHint">Live camera feed.</div>
         </div>
-        <p class="note" data-i18n="cameraNote">The live camera feed is available on the same private LAN as the UNO Q.</p>
       </section>
 
       <section class="card mode-card">
         <div class="card-header"><h2 data-i18n="controlMode">Control mode</h2></div>
         <div class="mode-buttons">
-          <button id="manual-button" type="button" data-i18n="takeControl">Take dashboard control</button>
-          <button id="automatic-button" type="button" data-i18n="returnAutomatic">Return to automatic</button>
+          <button id="manual-button" type="button" data-i18n="manualButton">Manual</button>
+          <button id="automatic-button" type="button" data-i18n="automaticButton">Automatic</button>
         </div>
         <div id="notice" class="notice" role="status" aria-live="polite" data-i18n="connectingNotice">Dashboard is connecting to the UNO Q.</div>
       </section>
@@ -149,7 +144,7 @@
       <section class="card controls-card">
         <div class="card-header"><h2 data-i18n="robotControls">Robot controls</h2></div>
         <div class="group">
-          <div class="group-title" data-i18n="movementHold">Movement · hold to continue</div>
+          <div class="group-title" data-i18n="movementHold">Press &amp; Hold</div>
           <div class="dpad">
             <span class="empty"></span><button class="hold-control control-button" data-command="forward" type="button"><span class="control-label" data-i18n="forward">Forward</span><kbd class="key-hint">W</kbd></button><span class="empty"></span>
             <button class="hold-control control-button" data-command="turn_left" type="button"><span class="control-label" data-i18n="turnLeft">Turn left</span><kbd class="key-hint">A</kbd></button><button class="stop control-button" data-command="stop" type="button"><span class="control-label" data-i18n="stop">STOP</span><kbd class="key-hint" data-i18n="space">Space</kbd></button><button class="hold-control control-button" data-command="turn_right" type="button"><span class="control-label" data-i18n="turnRight">Turn right</span><kbd class="key-hint">D</kbd></button>
@@ -166,9 +161,9 @@
     (() => {
       const translations = {
         en: {
-          title: "RoboDog manual control", subtitle: "UNO Q dashboard · press and hold a movement button", switchLanguage: "Tiếng Việt", switchLanguageAria: "Switch to Vietnamese", connectionStatus: "Connection status", connecting: "Connecting", connected: "Connected", offline: "Offline", inUse: "In use", automatic: "Automatic", dashboard: "Dashboard", bluetooth: "Bluetooth", manual: "Manual", unknown: "Unknown", camera: "Camera", live: "Live", waiting: "Waiting", cameraLiveHint: "Live camera feed.", cameraWaitingHint: "Waiting for camera frames.", cameraAlt: "RoboDog camera feed", cameraNote: "The live camera feed is available on the same private LAN as the UNO Q.", restartCamera: "Restart camera", cameraRestartRequested: "Camera restart requested.", controlMode: "Control mode", takeControl: "Take dashboard control", returnAutomatic: "Return to automatic", connectingNotice: "Dashboard is connecting to the UNO Q.", dashboardControlActive: "Dashboard control is active.", automaticRestored: "Automatic control restored.", dashboardBusy: "Dashboard is currently in use by another device.", bluetoothOwns: "Bluetooth currently owns manual control.", acceptedCommand: "Accepted: {command}", requestFailed: "Request failed ({status})", robotControls: "Robot controls", movementHold: "Movement · hold to continue", forward: "Forward", turnLeft: "Turn left", stop: "STOP", turnRight: "Turn right", strafeLeft: "Strafe left", backward: "Backward", strafeRight: "Strafe right", postures: "Postures", stand: "Stand", sit: "Sit", prone: "Prone", hold: "Hold", bounce: "Bounce", cameraUp: "Up", cameraDown: "Down", space: "Space", ballDetection: "Ball detection", ballInactive: "Inactive", ballSearching: "Searching", ballTracking: "Tracking ball", ballFound: "Ball found", ballLost: "Lost ball", ballNotFound: "Ball not found", detectedObjects: "Detected objects", noObjects: "No objects detected", neutral: "Neutral", stopScan: "Stop scan", status: "Status", control: "Control", robotState: "Robot state", face: "Face", hand: "Hand", faceFamiliar: "Familiar", faceUnfamiliar: "Unfamiliar", faceNone: "Not detected", lastCommand: "Last command", scan: "Camera scan", cameraHealth: "Camera feed", cameraRestarts: "Camera restarts", cameraRestartReason: "Last restart", cameraPath: "Camera device", noErrors: "No errors reported.", detected: "Detected", notDetected: "Not detected" },
+          title: "RoboDog", switchLanguage: "Tiếng Việt", switchLanguageAria: "Switch to Vietnamese", connectionStatus: "Connection status", connecting: "Connecting", connected: "Connected", offline: "Offline", inUse: "In use", automatic: "Automatic", dashboard: "Dashboard", bluetooth: "Bluetooth", manual: "Manual", unknown: "Unknown", camera: "Camera", live: "Live", waiting: "Waiting", cameraLiveHint: "Live camera feed.", cameraWaitingHint: "Waiting for camera frames.", cameraAlt: "RoboDog camera feed", restartCamera: "Restart camera", cameraRestartRequested: "Camera restart requested.", controlMode: "Control mode", manualButton: "Manual", automaticButton: "Automatic", connectingNotice: "Dashboard is connecting to the UNO Q.", dashboardControlActive: "Dashboard control is active.", automaticRestored: "Automatic control restored.", dashboardBusy: "Dashboard is currently in use by another device.", bluetoothOwns: "Bluetooth currently owns manual control.", acceptedCommand: "Accepted: {command}", requestFailed: "Request failed ({status})", robotControls: "Robot controls", movementHold: "Press & Hold", forward: "Forward", turnLeft: "Turn left", stop: "STOP", turnRight: "Turn right", strafeLeft: "Strafe left", backward: "Backward", strafeRight: "Strafe right", postures: "Postures", stand: "Stand", sit: "Sit", prone: "Prone", hold: "Hold", bounce: "Bounce", cameraUp: "Up", cameraDown: "Down", space: "Space", ballDetection: "Ball detection", ballInactive: "Inactive", ballSearching: "Searching", ballTracking: "Tracking ball", ballFound: "Ball found", ballLost: "Lost ball", ballNotFound: "Ball not found", detectedObjects: "Detected objects", noObjects: "No objects detected", neutral: "Neutral", stopScan: "Stop scan", status: "Status", control: "Control", robotState: "Robot state", face: "Face", hand: "Hand", faceFamiliar: "Familiar", faceUnfamiliar: "Unfamiliar", faceNone: "Not detected", lastCommand: "Last command", scan: "Camera scan", cameraHealth: "Camera feed", cameraRestarts: "Camera restarts", cameraRestartReason: "Last restart", cameraPath: "Camera device", noErrors: "No errors reported.", detected: "Detected", notDetected: "Not detected" },
         vi: {
-          title: "Điều khiển thủ công RoboDog", subtitle: "Bảng điều khiển UNO Q · nhấn giữ nút di chuyển", switchLanguage: "English", switchLanguageAria: "Chuyển sang tiếng Anh", connectionStatus: "Trạng thái kết nối", connecting: "Đang kết nối", connected: "Đã kết nối", offline: "Ngoại tuyến", inUse: "Đang được sử dụng", automatic: "Tự động", dashboard: "Bảng điều khiển", bluetooth: "Bluetooth", manual: "Thủ công", unknown: "Không rõ", camera: "Camera", live: "Trực tiếp", waiting: "Đang chờ", cameraLiveHint: "Luồng camera đang trực tiếp.", cameraWaitingHint: "Đang chờ khung hình camera.", cameraAlt: "Luồng camera RoboDog", cameraNote: "Luồng camera trực tiếp khả dụng trên cùng mạng riêng với UNO Q.", restartCamera: "Khởi động lại camera", cameraRestartRequested: "Đã yêu cầu khởi động lại camera.", controlMode: "Chế độ điều khiển", takeControl: "Nhận quyền điều khiển", returnAutomatic: "Trở về tự động", connectingNotice: "Bảng điều khiển đang kết nối với UNO Q.", dashboardControlActive: "Đã kích hoạt điều khiển bằng bảng.", automaticRestored: "Đã khôi phục điều khiển tự động.", dashboardBusy: "Bảng điều khiển đang được thiết bị khác sử dụng.", bluetoothOwns: "Bluetooth đang giữ quyền điều khiển thủ công.", acceptedCommand: "Đã nhận: {command}", requestFailed: "Yêu cầu thất bại ({status})", robotControls: "Điều khiển robot", movementHold: "Di chuyển · nhấn giữ để tiếp tục", forward: "Tiến", turnLeft: "Quay trái", stop: "DỪNG", turnRight: "Quay phải", strafeLeft: "Ngang trái", backward: "Lùi", strafeRight: "Ngang phải", postures: "Tư thế", stand: "Đứng", sit: "Ngồi", prone: "Nằm", hold: "Giữ", bounce: "Nhún", cameraUp: "Lên", cameraDown: "Xuống", space: "Phím cách", ballDetection: "Phát hiện bóng", ballInactive: "Không hoạt động", ballSearching: "Đang tìm", ballTracking: "Đang theo dõi bóng", ballFound: "Đã thấy bóng", ballLost: "Mất bóng", ballNotFound: "Không tìm thấy bóng", detectedObjects: "Vật thể phát hiện", noObjects: "Không phát hiện vật thể", neutral: "Trung tâm", stopScan: "Dừng quét", status: "Trạng thái", control: "Điều khiển", robotState: "Trạng thái robot", face: "Khuôn mặt", hand: "Bàn tay", faceFamiliar: "Quen thuộc", faceUnfamiliar: "Không quen", faceNone: "Chưa phát hiện", lastCommand: "Lệnh cuối", scan: "Quét camera", cameraHealth: "Luồng camera", cameraRestarts: "Số lần khởi động lại", cameraRestartReason: "Lần khởi động cuối", cameraPath: "Thiết bị camera", noErrors: "Không có lỗi.", detected: "Đã phát hiện", notDetected: "Chưa phát hiện" }
+          title: "RoboDog", switchLanguage: "English", switchLanguageAria: "Chuyển sang tiếng Anh", connectionStatus: "Trạng thái kết nối", connecting: "Đang kết nối", connected: "Đã kết nối", offline: "Ngoại tuyến", inUse: "Đang được sử dụng", automatic: "Tự động", dashboard: "Bảng điều khiển", bluetooth: "Bluetooth", manual: "Thủ công", unknown: "Không rõ", camera: "Camera", live: "Trực tiếp", waiting: "Đang chờ", cameraLiveHint: "Luồng camera đang trực tiếp.", cameraWaitingHint: "Đang chờ khung hình camera.", cameraAlt: "Luồng camera RoboDog", restartCamera: "Khởi động lại camera", cameraRestartRequested: "Đã yêu cầu khởi động lại camera.", controlMode: "Chế độ điều khiển", manualButton: "Thủ công", automaticButton: "Tự động", connectingNotice: "Bảng điều khiển đang kết nối với UNO Q.", dashboardControlActive: "Đã kích hoạt điều khiển bằng bảng.", automaticRestored: "Đã khôi phục điều khiển tự động.", dashboardBusy: "Bảng điều khiển đang được thiết bị khác sử dụng.", bluetoothOwns: "Bluetooth đang giữ quyền điều khiển thủ công.", acceptedCommand: "Đã nhận: {command}", requestFailed: "Yêu cầu thất bại ({status})", robotControls: "Điều khiển robot", movementHold: "Nhấn & giữ", forward: "Tiến", turnLeft: "Quay trái", stop: "DỪNG", turnRight: "Quay phải", strafeLeft: "Ngang trái", backward: "Lùi", strafeRight: "Ngang phải", postures: "Tư thế", stand: "Đứng", sit: "Ngồi", prone: "Nằm", hold: "Giữ", bounce: "Nhún", cameraUp: "Lên", cameraDown: "Xuống", space: "Phím cách", ballDetection: "Phát hiện bóng", ballInactive: "Không hoạt động", ballSearching: "Đang tìm", ballTracking: "Đang theo dõi bóng", ballFound: "Đã thấy bóng", ballLost: "Mất bóng", ballNotFound: "Không tìm thấy bóng", detectedObjects: "Vật thể phát hiện", noObjects: "Không phát hiện vật thể", neutral: "Trung tâm", stopScan: "Dừng quét", status: "Trạng thái", control: "Điều khiển", robotState: "Trạng thái robot", face: "Khuôn mặt", hand: "Bàn tay", faceFamiliar: "Quen thuộc", faceUnfamiliar: "Không quen", faceNone: "Chưa phát hiện", lastCommand: "Lệnh cuối", scan: "Quét camera", cameraHealth: "Luồng camera", cameraRestarts: "Số lần khởi động lại", cameraRestartReason: "Lần khởi động cuối", cameraPath: "Thiết bị camera", noErrors: "Không có lỗi.", detected: "Đã phát hiện", notDetected: "Chưa phát hiện" }
       };
       const state = { status: null, holdButton: null, holdTimer: null, keyboardButton: null, language: null, released: false };
       const $ = (id) => document.getElementById(id);
