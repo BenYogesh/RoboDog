@@ -25,10 +25,10 @@ The dashboard provides:
 - live webcam video at `/camera.mjpg`;
 - a button to take or release dashboard control;
 - press-and-hold movement controls with a stop-on-release safeguard;
-- posture, action, and camera commands;
+- combined posture/action controls for Stand, Sit, Prone, Hold pose, and Bounce;
+- Up/Down camera tilt controls (camera scanning is disabled during manual mode);
+- a compact face and hand detection strip above the live feed;
 - a **Restart camera** action for recovering from a USB power dip;
-- a full-width status/debug panel with control, detection, scan, and camera
-  restart details;
 - keyboard shortcuts: `W/A/S/D` move, `E/F` crab-step, `Q` sit, `C` prone,
   `Z` hold, and `Space` stops; `B` remains a backward alias (`S` and `B` both
   send the backend `b` command);
@@ -87,5 +87,5 @@ movement stops when Bluetooth commands stop arriving.
 6. Send Bluetooth `O`, then use **Take dashboard control**. Test movement only
    with the robot lifted or in a clear, supervised area; release a movement
    button and confirm it sends stop.
-7. Confirm the dashboard shows the last command and hand/face status. Press
+7. Confirm the dashboard's face/hand strip updates above the live feed. Press
    **Return to automatic**, then verify automatic vision behavior resumes.
