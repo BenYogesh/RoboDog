@@ -1,166 +1,166 @@
-# Timed Camera Scan Instructions
+# Quét camera bằng servo quay liên tục
 
-This guide covers the camera-lift feature shared by the ESP32 motor controller
-and the Arduino UNO Q vision app. It is written for the 360-degree SG90-style
-continuous-rotation servo connected to ESP32 GPIO 27.
+Tính năng này giúp RoboDog đưa người đang đứng ngoài khung hình vào tầm nhìn.
+BallTracker nhận ra một hộp người chỉ có phần chân; Python ra lệnh cho servo
+camera nghiêng lên, tìm khuôn mặt quen hoặc bàn tay, rồi đưa camera về gần vị
+trí ban đầu sau khi có mục tiêu hoặc hết thời gian.
 
-## What The Feature Does
+## 1. Giới hạn quan trọng của cơ cấu
 
-When the robot is standing and the camera sees a person whose bounding box
-contains only their legs, the UNO Q asks the ESP32 to rotate the camera upward.
-The path depends on `REQUIRE_FAMILIAR_FACE`:
+Servo ở GPIO27 là loại quay liên tục (continuous rotation), không phải servo góc
+có phản hồi vị trí. Giá trị xung chỉ quyết định **chiều và tốc độ quay**:
 
-1. When it is `True`, the upward scan looks only for a **familiar** face.
-2. When that familiar face is found and a hand is already visible, the camera
-   holds position for gesture recognition.
-3. When that familiar face is found but no hand is visible, the ESP32 stops,
-   then scans downward for the hand. That down-scan is limited to the elapsed
-   upward time, so it cannot intentionally pass the neutral view.
-4. A hand stops its current scan after two consecutive hand detections, which
-   reduces false stops. The camera holds while the hand remains visible.
-5. When the hand is missing for one second, the ESP32 returns only by the
-   remaining signed offset. For example, 0.9 s up then 0.6 s down returns for
-   about 0.3 s down, rather than the full 0.9 s.
-6. When `REQUIRE_FAMILIAR_FACE` is `False`, the robot skips the face stage and
-   scans upward only for a hand; faces do not stop that scan.
+- Xung gần 1500 micro giây là dừng.
+- Không có cảm biến cho biết camera đang ở góc bao nhiêu.
+- Vì vậy các lệnh Up, Down và Return đều là chuyển động có thời gian; n
+  không thể bảo đảm góc tuyệt đối nếu servo trượt, nguồn thay đổi hoặc cơ cấu bị
+  kẹt.
 
-The ESP32 also stops any uninterrupted up or down scan after 1.8 seconds. This
-is a safety limit in case the UNO Q app or UART link stops responding.
+Luôn kê robot, giữ cơ cấu camera không chạm điểm chặn và thay đổi từng thông số
+một lần. Nếu servo quay liên tục sau khi phải dừng, chưa nên cho robot chạy.
 
-Because the SG90 is a continuous-rotation servo, it has no position feedback.
-The return is time-based, not an absolute angle measurement. A small drift is
-normal and should be corrected by tuning the servo stop and speed values.
+## 2. Phần cứng và dây nối
 
-## Wiring
-
-| Connection | Connect to |
+| Thành phần | Kết nối |
 | --- | --- |
-| SG90 signal | ESP32 GPIO 27 |
-| SG90 power | Stable external 5 V supply |
-| SG90 ground | Supply ground and ESP32 ground |
-| UNO Q TX (D1) | ESP32 UART2 RX, GPIO 16 |
-| UNO Q RX (D0) | ESP32 UART2 TX, GPIO 17 |
-| UNO Q ground | ESP32 ground |
+| Servo camera SG90 continuous-rotation, dây tín hiệu | ESP32 GPIO27 |
+| Nguồn servo | Nguồn ngoài 5 V đủ dòng; không lấy từ chân 3,3 V |
+| Mass servo | Nối chung GND với ESP32 và UNO Q |
+| UNO Q TX D1 | ESP32 UART2 RX GPIO16 |
+| UNO Q RX D0 | ESP32 UART2 TX GPIO17 |
+| UART UNO Q–ESP32 | 115200 baud, TX/RX nối chéo, chung GND |
 
-Do **not** power the SG90 from the ESP32 3.3 V pin. Use a suitable 5 V supply
-and ensure that its ground is common with the ESP32. Before connecting the UNO
-Q UART pins, confirm that the board UART logic levels are compatible with the
-ESP32's 3.3 V inputs.
+Servo chân và servo camera có thể gây sụt áp lớn cùng lúc. Dây nguồn phải đủ
+tiết diện, nguồn 5 V camera phải tách khỏi nguồn logic nếu cần, nhưng GND vẫn
+phải chung. Trước khi nối UART, kiểm tra mức logic của hai board là 3,3 V.
 
-## Files And Responsibilities
+## 3. Máy trạng thái trong Python
 
-| File | Responsibility |
-| --- | --- |
-| `python/main.py` | Detects legs, hands, and faces; owns the scan state machine; sends commands through Arduino Bridge. |
-| `sketch/sketch.ino` | Validates one-character commands and forwards them as `CMD:<char>` frames over `Serial1`. |
-| ESP32 `dog_esp32.ino` | Drives GPIO 27, records scan duration, performs the reverse return, and limits an unattended scan to 1.8 seconds. |
+Các hàm start_camera_scan, stop_camera_scan, start_hand_scan_below_face,
+return_camera_from_scan và update_camera_scan ở python/main.py giữ một biến
+thời gian có dấu camera_net_offset_s. Dấu dương là đã đi lên nhiều hơn đi
+xuống; dấu âm là ngược lại.
 
-## Camera Commands
-
-All camera commands travel from the UNO Q to the ESP32 as `CMD:<character>`
-followed by a newline.
-
-| Command | ESP32 action | Normal producer |
+| Trạng thái | Khi nào vào | Việc thực hiện |
 | --- | --- | --- |
-| `h` | Timed upward fixed-view step | Manual/fixed camera control |
-| `l` | Timed downward fixed-view step | Ball-mode camera control |
-| `n` | Return using the remaining signed scan offset; otherwise request logical neutral | Target lost, scan timeout |
-| `r` | Start continuous upward scan and start recording time | Legs-only person detection |
-| `v` | Start continuous downward hand scan and subtract its time from the offset | Familiar face found without a hand |
-| `x` | Stop active scan, retain its signed time, and hold position | Familiar face or confirmed hand detection |
+| IDLE | Không quét. Nếu thấy người chỉ có chân, bắt đầu r. | Không tự di chuyển camera. |
+| FACE_SCANNING | REQUIRE_FAMILIAR_FACE = True. | Quét lên, kiểm tra FaceGate thường xuyên hơn. Mặt quen làm dừng x. |
+| HAND_SCANNING | Không yêu cầu mặt, hoặc đã thấy mặt quen. | Quét tay; sau mặt quen, hướng là xuống và thời gian không vượt phần đã đi lên. |
+| LOCKED | Đã thấy mặt/tay. | Giữ camera tại chỗ; mất tay/mặt đủ lâu mới trả về. |
+| RETURNING | Timeout, mất mục tiêu hoặc đã xác nhận cử chỉ. | Gửi n: ESP32 dùng thời gian còn lại đã ghi để quay về gần trung tính. |
 
-`h`, `l`, and `n` are logical views only. A continuous-rotation servo cannot
-know its physical angle, so they are short timed movements rather than absolute
-positions.
+Khi REQUIRE_FAMILIAR_FACE = True, mặt lạ không dừng giai đoạn tìm mặt. Khi
+đặt False, robot bỏ qua bước mặt và quét tay ngay.
 
-## Settings To Tune
+Một tay phải được phát hiện trong hai lần kiểm tra liên tiếp
+(CAMERA_HAND_CONFIRMATIONS = 2) mới được coi là xác nhận. Điều này giảm việc
+một khung hình nhiễu làm camera dừng quá sớm.
 
-### ESP32: servo motion
+## 4. Lệnh camera trên UART
 
-Edit these values in `dog_esp32.ino`:
+Mọi lệnh đi theo khung CMD:<char>\n từ UNO Q tới ESP32:
 
-```cpp
-constexpr int CAMERA_SERVO_STOP_US = 1500;
-constexpr int CAMERA_SERVO_UP_US = 1440;
-constexpr int CAMERA_SERVO_DOWN_US = 1560;
-constexpr unsigned long CAMERA_TILT_STEP_MS = 100;
-constexpr unsigned long CAMERA_SCAN_MAX_MS = 500;
-```
+| Ký tự | Ý nghĩa | Nguồn |
+| --- | --- | --- |
+| h | Nghiêng lên một bước cố định | Nút Up thủ công trên dashboard. |
+| l | Nghiêng xuống một bước cố định | Nút Down thủ công trên dashboard. |
+| n | Trả về bằng thời gian còn lại đã ghi | Python khi scan kết thúc hoặc dashboard yêu cầu trung tính. |
+| r | Bắt đầu quét liên tục lên và ghi thời gian | Phát hiện người chỉ có chân. |
+| v | Bắt đầu quét liên tục xuống | Tìm tay sau mặt quen hoặc chế độ hand-only. |
+| x | Dừng quét đang chạy và giữ vị trí | Đã thấy mặt/tay. |
 
-- `CAMERA_SERVO_STOP_US`: Adjust until the servo is fully still. Start with
-  1500 microseconds, then change in small steps such as 5–10 microseconds.
-- `CAMERA_SERVO_UP_US` and `CAMERA_SERVO_DOWN_US`: Set equal-size offsets on
-  opposite sides of the stop value. The current replacement mechanism is
-  reversed, so the logical up value is below neutral and the logical down value
-  is above neutral. The ±60 microsecond offsets slow its faster drive; tune in
-  5–10 microsecond steps if needed. If scanning moves the lens in the wrong
-  direction, swap these two values.
-- `CAMERA_TILT_STEP_MS`: Length of a manual `h` or `l` movement. Keep it small
-  because it is not position-controlled.
-- `CAMERA_SCAN_MAX_MS`: Physical travel safety limit. Set it below the time
-  that would force the camera mount into a hard stop.
+h, l, n chỉ là “góc nhìn logic”. Vì servo không báo vị trí, không gọi chúng là
+góc tuyệt đối.
 
-### UNO Q: vision behavior
+## 5. Thông số hiện tại
 
-Edit these values near the camera command constants in `python/main.py`:
+### Firmware ESP32
 
-```python
+Trong dog_esp32/dog_esp32.ino:
+
+~~~cpp
+CAMERA_SERVO_STOP_US = 1500
+CAMERA_SERVO_UP_US = 1440
+CAMERA_SERVO_DOWN_US = 1560
+CAMERA_TILT_STEP_MS = 100
+CAMERA_SCAN_MAX_MS = 500
+~~~
+
+- CAMERA_SERVO_STOP_US: chỉnh từng 5–10 micro giây cho tới khi servo đứng yên
+  hoàn toàn.
+- CAMERA_SERVO_UP_US và CAMERA_SERVO_DOWN_US: cơ cấu mới quay ngược hướng,
+  nên Up thấp hơn trung tính và Down cao hơn. Nếu chiều thực tế ngược, đổi hai
+  giá trị; nếu quá nhanh, giảm độ lệch khỏi 1500.
+- CAMERA_TILT_STEP_MS: thời lượng một bước Up/Down thủ công.
+- CAMERA_SCAN_MAX_MS: khóa an toàn vật lý cho mỗi lần quét liên tục; đặt thấp
+  hơn thời gian cần để cơ cấu chạm chặn.
+
+### Ứng dụng Python
+
+Trong python/main.py:
+
+~~~python
 CAMERA_SCAN_TIMEOUT_S = 1.5
 CAMERA_TARGET_LOST_S = 1.0
 CAMERA_HAND_CONFIRMATIONS = 2
 CAMERA_SCAN_FACE_CHECK_PERIOD_S = 0.25
 CAMERA_RETURN_SETTLE_S = 0.1
-```
+~~~
 
-- Keep `CAMERA_SCAN_TIMEOUT_S` shorter than `CAMERA_SCAN_MAX_MS / 1000`.
-- Increase `CAMERA_HAND_CONFIRMATIONS` if a false hand detection stops scans.
-  Decrease it to `1` only if the hand detector misses targets too often.
-- Increase `CAMERA_TARGET_LOST_S` if the lens returns while a person is still
-  present but briefly occluded.
-- Lower `CAMERA_SCAN_FACE_CHECK_PERIOD_S` only if the UNO Q has enough CPU for
-  more frequent face recognition.
-- `CAMERA_RETURN_SETTLE_S` is an extra software guard after the calculated
-  return time. It prevents a new leg detection from interrupting the ESP32 as
-  the continuous servo reaches neutral.
+CAMERA_SCAN_TIMEOUT_S là giới hạn logic của Python; CAMERA_SCAN_MAX_MS là giới
+hạn phần cứng trong ESP32. Giá trị kho hiện tại là 1,5 giây so với 500 ms, vì
+vậy ESP32 có thể tự dừng trước khi Python hết timeout. Khi hiệu chỉnh một cơ
+cấu mới, nên đặt hai giới hạn nhất quán (Python không nên chờ lâu hơn hành
+trình an toàn của ESP32) và thử lại từ thời lượng nhỏ.
 
-## Deployment And Test Procedure
+## 6. Các file liên quan
 
-1. With the robot supported so its legs cannot walk, flash the ESP32 firmware.
-2. Deploy the UNO Q project containing both `python/main.py` and
-   `sketch/sketch.ino` using the normal App Lab workflow.
-3. Power the camera servo from its external 5 V supply and confirm the common
-   ground connection.
-4. Start the vision app. Check that the terminal does not report `CAMERA ERROR`.
-5. With `REQUIRE_FAMILIAR_FACE = True`, stand where the camera sees only your
-   legs. The terminal should report `Scanning for familiar face`, and the lens
-   should move upward.
-6. Let a familiar face enter the frame without raising a hand. The terminal should
-   report `Familiar face found; scanning down for hand`; the lens should stop
-   briefly, then move down. It should move down for no longer than it moved up.
-7. Raise a hand during that down-scan. The terminal should report `Hand found`.
-   Move the hand out of view; after about one second, the return should use only
-   the remaining up-minus-down time.
-8. Set `REQUIRE_FAMILIAR_FACE = False` and repeat. The terminal should report
-   `Scanning for hand`; a face alone must not stop the scan, but a confirmed
-   hand must stop it.
-9. Repeat with no expected target visible. It should report a face- or
-   hand-scan timeout and return after about 1.5 seconds or sooner for the
-   down-scan.
-10. If the direction is reversed, swap `CAMERA_SERVO_UP_US` and
-   `CAMERA_SERVO_DOWN_US`, flash the ESP32 again, and repeat the test.
-
-## Troubleshooting
-
-| Symptom | Likely cause and action |
+| File | Phần việc |
 | --- | --- |
-| Servo creeps while it should hold | Tune `CAMERA_SERVO_STOP_US` in 5–10 microsecond steps. |
-| Servo moves in the wrong direction | Swap the UP and DOWN pulse-width values. |
-| Servo buzzes, resets, or makes the ESP32 reboot | Use a stronger external 5 V supply and verify common ground. |
-| Camera reaches its mechanical stop | Reduce `CAMERA_SCAN_MAX_MS` and `CAMERA_SCAN_TIMEOUT_S` immediately. |
-| Scan does not start | Confirm the person detector sees a legs-only box, the robot is standing, and the UNO Q UART frame reaches the ESP32. |
-| Scan starts but never stops on a target | Check camera focus/lighting, hand/face models, and lower the hand-confirmation count if needed. |
-| ESP32 prints `Camera scan safety timeout.` | The UNO Q did not send a stop or return in time; inspect the vision app, Bridge connection, and UART wiring. |
+| python/main.py | Phát hiện người chỉ có chân, máy trạng thái scan, nhận mặt/tay và tính thời gian trả về. |
+| python/ball_tracker.py | Cung cấp detect_person, is_legs_only và bộ đếm để không chạy model người ở mọi khung hình. |
+| sketch/sketch.ino | Cho phép các ký tự camera và chuyển chúng thành khung CMD. |
+| dog_esp32/dog_esp32.ino | Phát xung GPIO27, ghi thời gian scan, dừng safety timeout và thực hiện return. |
+| python/manual_video.py, web/dashboard.html | Phục vụ nút Up/Down/Restart và hiển thị trạng thái camera. |
 
-When adjusting servo timings, change one value at a time and re-test with the
-robot supported. Avoid increasing any duration until you have verified the
-camera mount has enough mechanical travel.
+Trong manual, scan tự động bị hủy. Nút Up/Down chỉ chạy một bước 100 ms; nút
+Restart khởi động lại webcam, không làm servo quay.
+
+## 7. Cách thử từng bước
+
+1. Kê robot lên giá, tháo tải khỏi cơ cấu nếu cần; flash ESP32 và deploy UNO Q.
+2. Bật nguồn servo camera ngoài, xác nhận GND chung và kiểm tra servo đứng yên
+   ở 1500.
+3. Chạy ứng dụng, mở dashboard và xác nhận có khung hình. Nếu không, thử
+   Restart camera trước khi chẩn đoán servo.
+4. Ở Manual, nhấn Up rồi Down một lần; xác nhận chiều mới đúng và camera dừng
+   sau khoảng 100 ms.
+5. Chọn Automatic, đặt REQUIRE_FAMILIAR_FACE = True, đứng sao cho chỉ thấy
+   chân. Terminal phải ghi Scanning for familiar face và camera đi lên.
+6. Để mặt quen xuất hiện. Python gửi x, sau đó v trong thời gian không vượt
+   thời gian đã đi lên để tìm tay.
+7. Giơ tay cho tới khi có hai lần xác nhận. Camera giữ vị trí; khi tay mất hoặc
+   timeout, Python gửi n và chờ CAMERA_RETURN_SETTLE_S.
+8. Thử không có mục tiêu. ESP32 phải dừng vì CAMERA_SCAN_MAX_MS, sau đó Python
+   báo timeout và đưa camera về.
+9. Đặt REQUIRE_FAMILIAR_FACE = False để thử chế độ hand-only; mặt một mình
+   không được dừng scan.
+10. Sau mỗi lần thử, ghi lại chiều, thời lượng, điện áp và thông báo terminal.
+
+## 8. Chẩn đoán
+
+| Hiện tượng | Kiểm tra và cách xử lý |
+| --- | --- |
+| Servo bò khi phải đứng | Chỉnh CAMERA_SERVO_STOP_US từng 5–10 micro giây; kiểm tra nguồn 5 V. |
+| Up/Down ngược | Đổi hai giá trị CAMERA_SERVO_UP_US và CAMERA_SERVO_DOWN_US. |
+| Servo rung, ESP32 reset | Dùng nguồn ngoài 5 V đủ dòng, tụ gần servo và GND chung; không cấp từ 3,3 V. |
+| Camera chạm điểm chặn | Giảm ngay CAMERA_SCAN_MAX_MS và CAMERA_SCAN_TIMEOUT_S; kiểm tra cơ khí. |
+| Scan không bắt đầu | Đảm bảo robot ở trạng thái đứng, hộp người chạm mép trên và cao ít nhất 40 pixel. |
+| Scan không dừng ở tay/mặt | Kiểm tra ánh sáng, model, REQUIRE_FAMILIAR_FACE và số lần xác nhận. |
+| Luôn trả sai vị trí | Đây là giới hạn servo quay liên tục; kiểm tra trượt cơ khí và hiệu chỉnh thời gian. |
+| Terminal ghi Camera scan safety timeout. | ESP32 đã tự dừng vì quá thời gian; kiểm tra Python/Bridge/UART và giảm thời lượng. |
+| Nút Restart không có tác dụng | Xem camera_last_restart_reason, đường dẫn UNO_Q_CAMERA_PATH và quyền lease dashboard. |
+
+Không tăng thời lượng chỉ để “đi đủ góc” nếu servo chưa đứng yên ở 1500. Với
+cơ cấu cần vị trí lặp lại chính xác, hãy dùng servo có phản hồi góc hoặc thêm
+cảm biến vị trí thay vì tiếp tục kéo dài bộ định thời.

@@ -1,223 +1,399 @@
-# Cấu trúc code và luồng dữ liệu RoboDog trên Arduino Uno Q
-## Kiến trúc thượng tầng
-Chương trình chính của robot được chia làm 2 nửa, chạy trên 2 máy tính nhúng khác nhau:
+# Cấu trúc code và luồng dữ liệu RoboDog
 
-- **Arduino Uno Q**: Chia làm 2 bộ phận
-  - Chip Qualcomm Dragonwing QRB2210: Chạy hệ điều hành Debian Linux, lập trình bằng ngôn ngữ Python. Xử lý đầu vào hình ảnh từ camera, chạy mô hình nhận dạng, so sánh với cơ sở dữ liệu khuôn mặt, phát hiện cử chỉ, đồ vật (quả bóng). Đưa ra lệnh hành động cho robot dựa trên kết quả xử lý.
-  - Chip STM32U585: Chạy hệ điều hành Arduino Zephyr, lập trình bằng ngôn ngữ C++. Chức năng làm cầu nối từ chương trình xử lý hình ảnh tới chương trình xử lý vận động trên chip ESP32 thông qua Serial và hiển thị trạng thái khuôn mặt trên ma trận LED có sẵn.
-- **ESP32S**:
-  - Nhận tín hiệu từ Arduino Uno Q, kết hợp với việc đọc cảm ứng góc nghiêng MPU6050 và thuật toán PID để tinh chỉnh sai số, từ đó gửi tín hiệu điều khiển các servo ST3215 để robot chuyển động.
- 
-Hướng dẫn này sẽ chỉ nói tới phần code trên Arduino Uno Q.
+Tài liệu này giải thích toàn bộ đường đi của dữ liệu, từ một khung hình webcam
+đến lệnh servo. Không cần biết trước Python hay Arduino: trước hết hãy nắm
+được ba tầng **nhìn**, **cầu nối** và **chuyển động**, sau đó đọc phần tương
+ứng với việc bạn muốn sửa.
 
-## Luồng dữ liệu tổng quan trên Uno Q
+> Quy tắc đọc nhanh: Python quyết định *robot nên làm gì*; sketch.ino chuyển
+> lời gọi giữa hai chip UNO Q; ESP32 quyết định *các servo phải di chuyển thế
+> nào*. Các chuỗi như CMD:w và tên biến phải giữ nguyên khi làm theo hướng dẫn,
+> vì đó là giao thức thật trong code.
 
-```mermaid
-flowchart TD
-    Camera["Webcam"] --> Stream["CameraStream trong <br>python/main.py"]
-    Stream --> Loop["main_loop"]
-    Loop --> Hands["HandGestureDetector"]
-    Loop --> Face["FaceGate"]
-    Loop --> Ball["BallTracker"]
-    Hands --> Decide["Nhận diện <br>cử chỉ và khuôn mặt"]
-    Face --> Gate["Phát hiện người quen"]
-    Ball --> Chase["Đuổi theo đối tượng"]
-    Decide --> Bridge["Giao tiếp Bridge"]
-    Gate --> Bridge
-    Chase --> Bridge
-    Bridge --> Sketch["sketch/sketch.ino <br>xử lý Bridge"]
-    Sketch --> Matrix["Hiển thị lên <br>ma trận LED của Uno Q"]
-    Sketch --> UART["Gửi tín hiệu <br>tới ESP32 qua Serial1"]
-    Stream --> Dashboard["manual_video.py <br>webcam + dashboard :8080"]
-```
+## 1. Ba tầng của hệ thống
 
-## Chỉ mục các file code
-| Đường dẫn | Chức năng |
-| --- | --- |
-| `sketch/sketch.ino` | Code xử lý Bridge - giao tiếp giữa 2 chip trong Arduino Uno Q. Điều khiển ma trận LED, đưa tín hiệu tới ESP32 và chuyển thông báo chế độ Bluetooth về Python. |
-| `python/main.py` | Code điều phối chính: Xử lý luồng hình ảnh từ camera; Chạy mô hình nhận dạng khuôn mặt, cử chỉ, đồ vật; Chuyển đổi trạng thái robot; Giao tiếp Bridge. |
-| `python/manual_video.py` | Phát luồng MJPEG và dashboard điều khiển trên cổng 8080; quản lý quyền một thiết bị. |
-| `dog_esp32/dog_esp32.ino` | Firmware chuyển động, camera servo, Bluetooth và watchdog trên ESP32. |
-| `python/detector.py` | Code nhận dạng cử chỉ bàn tay, sử dụng mô hình MediaPipe. |
-| `python/hand_models/` | Thư mục chứa các file mô hình MediaPipe giúp nhận dạng bàn tay. |
-| `python/face_gate.py` | Code nhận dạng khuông mặt, sử dụng mô hình YuNet và SFace. |
-| `python/enroll_faces.py` | Code xây dựng file cơ sở dữ liệu khuôn mặt `known_faces_db.json`. |
-| `python/known_faces/` | Thư mục chứa ảnh chân dung để làm đầu vào xây dựng dữ liệu khuôn mặt. |
-| `python/known_faces_db.json` | File cơ sở dữ liệu khuôn mặt, được `face_gate.py` sử dụng để nhận diện khuôn mặt người quen. |
-| `python/ball_tracker.py` | Code phát hiện con người và nhận diện đồ vật (quả bóng), sử dụng mô hình YOLOv8n. Đưa ra lệnh di chuyển theo đối tượng được nhận diện. |
-| `python/requirements.txt` | Danh sách các thư viện Python cần sử dụng. |
+Arduino UNO Q có hai chip. Chip Qualcomm chạy Linux và Python; chip STM32 chạy
+chương trình Arduino/Zephyr. ESP32 là bộ điều khiển servo độc lập.
 
-## Quá trình khởi động
-1. `sketch/sketch.ino` mở cổng `Serial1`, khởi động ma trận LED trên Arduino UNO Q và thư viện Arduino Router Bridge.
-2. `sketch/sketch.ino` khai báo các hàm Bridge `send_motor_command`, `set_control_mode` và `update_face_matrix`; đồng thời chuyển `MODE:MANUAL`/`MODE:AUTO` từ ESP32 về Python.
-3. `python/main.py` khởi động, chạy `Bridge`, mở luồng hình ảnh `CameraStream` từ webcam.
-4. `python/main.py` khai báo 3 chương trình xử lý hình ảnh: `HandGestureDetector`, `FaceGate`, và `BallTracker`.
-5. `verify_face_models()` kiểm tra mô hình YuNet và SFace đã cài đặt có tương thích với OpenCV không.
-6. `App.run(user_loop=main_loop)` chạy vòng lặp chính `main_loop`.
-
-## Luồng dữ liệu
-Mỗi vòng lặp của `main_loop` trong `python/main.py` sẽ chạy theo thứ tự các bước sau:
-1. Đọc khung hình camera mới nhất.
-2. Lật ngang khung hình để tiện cho việc giao tiếp với người điều khiển đang đứng đối diện với robot.
-3. Xét trạng thái hiện tại, nếu đang đuổi theo mục tiêu, lập tức chạy theo nhánh đuổi mục tiêu.
-4. Nếu không, tuân theo mệnh lệnh đang có đến khi hết thời gian chờ.
-5. Chạy code nhận diện cử chỉ bàn tay với khung hình mới nhất.
-6. Chạy code nhận diện khuôn mặt. Nếu không nhìn thấy mặt mà nhìn thấy chân, ra lệnh ngẩng camera lên.
-7. Chuyển kết quả nhận diện thành mệnh lệnh, bao gồm các thành phần:
-   - Lệnh di chuyển tới ESP32.
-   - Ghi trạng thái debug vào terminal.
-   - Cập nhận hiển thị cho ma trận led có sẵn.
-9. Gửi mệnh lệnh qua Bridge tới `sketch/sketch.ino`. 
-
-### Giao tiếp Bridge giữa Python và Arduino
-| Lệnh từ Python | Hàm xử lý trong Arduino | Chức năng |
-| --- | --- | --- |
-| `bridge.call("update_face_matrix", expression)` | `handle_face_expression(String expression)` | Vẽ biểu cảm khuôn mặt lên ma trận LED trên Uno Q |
-| `bridge.call("send_motor_command", command)` | `send_motor_command(String command)` | Chuyển lệnh tới ESP32 qua `Serial1`. |
-| `bridge.call("set_control_mode", mode)` | `set_control_mode(String mode)` | Yêu cầu ESP32 chuyển quyền nhận lệnh giữa Bluetooth và UNO Q. |
-
-### Giao tiếp giữa Arduino Uno Q và ESP32
-`send_motor_command` gửi tín hiệu điều khiển - là một kí tự duy nhất - qua UART `Serial1` theo mẫu:
-
-```text
-CMD:<kí tự>
-```
-
-Ví dụ, lệnh tiến lên `w` trở thành:
-
-```text
-CMD:w
-```
-
-Sử dụng mẫu này sẽ giúp tránh được việc nhiễu tín hiệu trên luồng giao tiếp UART.
-
-## Bảng lệnh
-Danh sách lệnh đang được Python sử dụng:
-| Kí tự | Mệnh lệnh | Lệnh thủ công | Lệnh tự động |
+| Tầng | Mã nguồn | Nhiệm vụ | Kết quả đầu ra |
 | --- | --- | --- | --- |
-| `w` | Tiến lên | Chỉ lên trên | Đuổi theo đối tượng |
-| `s` | Dừng lại | Xòe tay | Đã tìm thấy đối tượng <br> Hết thời gian lệnh |
-| `a` | Quay trái | Chỉ sang trái | Đối tượng ở bên trái |
-| `d` | Quay phải | Chỉ sang phải | Đối tượng ở bên phải |
-| `q` | Ngồi | Chỉ xuống khi đang đứng <br> Chỉ lên khi đang nằm | |
-| `c` | Nằm | Chỉ xuống khi đang ngồi |
-| `n` | Camera quay về trung tính theo thời gian còn lại | | Mất mục tiêu hoặc quét quá thời gian |
-| `r` | Bắt đầu quét camera đi lên theo thời gian | | Tìm khuôn mặt quen, hoặc bàn tay khi tắt yêu cầu khuôn mặt |
-| `v` | Bắt đầu quét camera xuống để tìm bàn tay | | Đã tìm thấy khuôn mặt quen nhưng chưa thấy bàn tay |
-| `x` | Dừng quét camera đang hoạt động | | Đã tìm thấy khuôn mặt quen hoặc bàn tay được xác nhận |
+| Nhìn và quyết định | python/main.py, detector.py, face_gate.py, ball_tracker.py | Đọc webcam, chạy mô hình, xác định người/cử chỉ/bóng và máy trạng thái. | Một lệnh một ký tự, ví dụ w, q hoặc a. |
+| Cầu nối UNO Q | sketch/sketch.ino trên STM32 | Nhận lời gọi Bridge từ Python, kiểm tra ký tự, chuyển khung UART tới ESP32; hiển thị biểu cảm LED. | Khung CMD:<char>\n hoặc MODE:<mode>\n. |
+| Chuyển động | ESP32, dog_esp32/dog_esp32.ino | Đổi ký tự thành quỹ đạo chân, tính IK, cân bằng bằng MPU6050, rồi gửi vị trí tới 12 servo ST3215. | Vị trí đồng bộ cho 12 servo ST3215 và telemetry. |
 
-## Các chế độ trạng thái robot
+Webcam được đọc một lần nhưng có hai người dùng: vòng lặp Python dùng để nhận
+diện, còn python/manual_video.py mã hóa khung hình mới nhất thành luồng
+MJPEG cho dashboard. Khi manual, việc ra quyết định tự động dừng lại nhưng
+luồng camera vẫn chạy.
 
-`python/main.py` theo dõi trạng thái robot qua `robot_state`:
+## 2. Luồng dữ liệu tổng quát
 
-| Trạng thái | Chức năng |
+~~~mermaid
+flowchart LR
+    Cam[Webcam] --> Stream[CameraStream<br/>python/main.py]
+    Stream --> Loop[main_loop]
+    Loop --> Hand[HandGestureDetector<br/>MediaPipe ONNX]
+    Loop --> Face[FaceGate<br/>YuNet + SFace]
+    Loop --> Ball[BallTracker<br/>YOLOv8n ONNX]
+    Hand --> Decide[Máy trạng thái<br/>chọn lệnh]
+    Face --> Decide
+    Ball --> Decide
+    Decide --> Bridge[Arduino Bridge]
+    Bridge --> Sketch[sketch/sketch.ino<br/>STM32 UNO Q]
+    Sketch --> LED[Ma trận LED]
+    Sketch --> UART[Serial1<br/>CMD:<char>]
+    UART --> ESP[ESP32 firmware]
+    ESP --> Servos[12 servo ST3215]
+    ESP --> IMU[MPU6050 + PID]
+    Stream --> Web[manual_video.py<br/>HTTP :8080]
+    Web --> Browser[Dashboard + MJPEG]
+~~~
+
+Ví dụ với cử chỉ chỉ sang trái:
+
+1. CameraStream lấy khung hình và main_loop lật ngang để hình giống góc nhìn
+   của người đối diện robot.
+2. HandGestureDetector trả về 21 điểm mốc. main.py thấy ngón trỏ chỉ sang trái
+   và chọn CMD_LEFT = "a".
+3. bridge.call("send_motor_command", "a") chạy hàm an toàn trong
+   sketch/sketch.ino.
+4. STM32 gửi chính xác CMD:a\n trên Serial1.
+5. ESP32 nhận ký tự a, tạo gait quay trái, tính IK cho từng chân rồi gửi vị trí
+   mới bằng SyncWritePosEx.
+
+Nếu bước 1 không có khung hình, bước 2 không có tay, bước 3 báo lỗi Bridge,
+hoặc ESP32 không nhận khung UART, robot sẽ không chuyển động. Chia lỗi theo
+đúng các bước này giúp chẩn đoán nhanh hơn việc nhìn mỗi servo.
+
+## 3. Vai trò của từng file
+
+| Đường dẫn | Đọc file này khi bạn muốn… |
 | --- | --- |
-| `STATE_STANDING` | Trạng thái mặc định. Robot đứng yên. |
-| `STATE_SITTING` | Trạng thái ngồi, chỉ nhận lệnh chỉ lên hoặc xuống. |
-| `STATE_PRONE` | Trạng thái nằm; chỉ nhận lệnh chỉ lên. |
-| `STATE_CHASING` | Trạng thái đuổi theo đối tượng tự động. |
-| `STATE_MANUAL` | Tạm dừng quyết định tự động; giữ nhận diện tay để giám sát và nhận lệnh từ Bluetooth hoặc dashboard. |
+| python/main.py | Hiểu vòng lặp chính, các trạng thái, cooldown, quyền manual, camera scan và kết nối các detector. |
+| python/detector.py | Thay mô hình bàn tay hoặc thêm cách phân loại OPEN_PALM, FIST, POINTING. |
+| python/face_gate.py | Thay ngưỡng hoặc mô hình nhận diện khuôn mặt. |
+| python/enroll_faces.py | Đăng ký người mới và tạo lại known_faces_db.json. |
+| python/ball_tracker.py | Thay ngưỡng YOLO, vùng giữa khung hình, thời gian tìm bóng hoặc luật quay/đi. |
+| python/manual_video.py | Thay máy chủ web, API, quyền sở hữu dashboard hoặc luồng MJPEG. |
+| sketch/sketch.ino | Thay hàm Bridge, khung UART, danh sách lệnh được cho phép hoặc biểu cảm LED. |
+| dog_esp32/dog_esp32.ino | Thay chân GPIO, servo, gait, IK, tư thế, PID, nguồn thời gian và telemetry. |
+| web/dashboard.html | Thay bố cục, nhãn, phím PC hoặc cách hiển thị trạng thái. |
+| app.yaml và sketch/sketch.yaml | Kiểm tra cấu hình App Lab và nền tảng build của UNO Q. |
 
-Tùy theo trạng thái mà lệnh điều khiển bằng cử chỉ được xử lý khác nhau
-| Trạng thái hiện tại | Cử chỉ | Mệnh lệnh | Trạng thái tiếp theo |
-| --- | --- | --- | --- |
-| `STATE_STANDING` | Xòe tay | `s` | `STATE_STANDING` |
-| `STATE_STANDING` | Chỉ lên trên | `w` | `STATE_STANDING` |
-| `STATE_STANDING` | Chỉ sang trái | `a` | `STATE_STANDING` |
-| `STATE_STANDING` | Chỉ sang phải | `d` | `STATE_STANDING` |
-| `STATE_STANDING` | Chỉ xuống dưới | `q` | `STATE_SITTING` |
-| `STATE_STANDING` | Nắm tay | `s` | `STATE_CHASING` |
-| `STATE_SITTING` | Chỉ lên trên | `s` | `STATE_STANDING` |
-| `STATE_SITTING` | Chỉ xuống dưới | `c` | `STATE_PRONE` |
-| `STATE_PRONE` | Chỉ lên trên | `q` | `STATE_SITTING` |
-| `STATE_CHASING` | Chỉ xuống dưới | `s` | `STATE_STANDING` |
+Các mô hình không phải code: python/face_models/ chứa YuNet/SFace,
+python/hand_models/ chứa MediaPipe ONNX, còn python/yolov8n.onnx là model
+YOLO dùng cho bóng và người.
 
-Để tránh chồng chéo mệnh lệnh, robot có 2 bộ đếm thời gian chờ. Robot sẽ chỉ nhận lệnh mới khi đã hết thời gian chờ:
-- `COMMAND_COOLDOWN_S` dùng cho lệnh di chuyển cơ bản.
-- `POSTURE_TRANSITION_COOLDOWN_S` dùng cho lệnh thay đổi thế đứng.
+## 4. Điều gì xảy ra lúc khởi động?
 
-## Luồng dữ liệu nhận diện khuôn mặt
-Robot sẽ chỉ nhận tín hiệu cử chỉ tay khi nhận diện được khuôn mặt người quen có trong cơ sở dữ liệu. Robot vẫn có khả năng nhận diện được cử chỉ tay của một người lạ không có trong cơ sở dữ liệu, nhưng sẽ không hoạt động theo lệnh.
+### Trên STM32 UNO Q
 
-1. `enroll_faces.py` duyệt qua các hình ảnh trong `python/known_faces/<tên-người>/`.
-2. Với mỗi ảnh, code lấy ra khuôn mặt lớn nhất, chỉnh về giữa, chạy qua mô hình SFace để rút ra thông tin dữ liệu khuôn mặt. Tất cả kết quả của cùng một người sẽ được chia trung bình để lấy kết quả cuối cùng.
-3. Lưu kết quả vào `python/known_faces_db.json`.
-4. `FaceGate` sẽ đọc file này khi `python/main.py` khởi động.
-5. Khi đang chạy, `face_gate.recognize(frame)` sẽ trả về:
-   - `familiar` nếu khuôn mặt được nhận diện có trong cơ sở dữ liệu, với độ tự tin trên mức `FACE_MATCH_THRESHOLD`.
-   - `unfamiliar` nếu khuôn mặt được nhận diện không có trong cơ sở dữ liệu.
-   - `none` nếu không phát hiện khuôn mặt.
-6. Nếu thấy khuôn mặt người quen, vẽ hình mặt cười trên ma trận LED của Uno Q.
-7. Nếu chỉ thấy người lạ, vẽ hình mặt không cười trên ma trận LED của Uno Q.
+setup() trong sketch/sketch.ino mở Serial1 ở 115200 baud, khởi động
+Arduino_RouterBridge, khởi tạo ma trận LED và đăng ký ba hàm an toàn:
 
-- Trong file `python/main.py`, có biến `REQUIRE_FAMILIAR_FACE` kiểm soát việc nhận lệnh cử chỉ tay:
-  - Mặc định, biến này là `True`, robot sẽ chỉ hoạt động theo lệnh cử chỉ tay từ một người quen nhận diện được trong cơ sở dữ liệu.
-  - Nếu biến này được đặt thành `False`, robot sẽ hoạt động theo lệnh cử chỉ tay từ bất kì ai.
+- send_motor_command: chỉ nhận đúng một ký tự trong danh sách cho phép rồi gửi
+  CMD:<char>\n.
+- set_control_mode: gửi MODE:MANUAL\n hoặc MODE:AUTO\n tới ESP32.
+- update_face_matrix: đổi biểu cảm smiley, indifferent hoặc trạng thái trung
+  tính trên ma trận LED.
 
-## Luồng dữ liệu quét camera
-Khi phát hiện phần thân dưới của một người, robot sẽ ngẩng camera lên từ từ để tìm bàn tay hoặc khuôn mặt của người đó. Nếu phát hiện được mặt người hoặc tay, thời gian ngẩng camera lên sẽ được ghi lại, và robot chuyển qua xử lý nhận diện khuôn mặt và cử chỉ. Sau khi đã xác nhận mệnh lệnh, camera được hạ xuống dựa theo thời gian đã ghi lại.
+Mỗi vòng loop(), STM32 đọc các dòng ESP32 trả về. Khi thấy
+MODE:MANUAL/MODE:AUTO, nó gọi Bridge.notify("manual_mode_changed", …) để
+Python cập nhật quyền điều khiển.
 
-| Trạng thái quét | Điều kiện | Hành động |
+### Trên Qualcomm/Linux UNO Q
+
+python/main.py thực hiện các bước sau khi được App Lab chạy:
+
+1. Chọn webcam từ UNO_Q_CAMERA_PATH hoặc đường dẫn mặc định.
+2. Tạo CameraStream, mở webcam trong một luồng nền và giữ lại *khung hình mới
+   nhất* (không xếp hàng khung cũ).
+3. Tạo ManualVideoServer, lắng nghe 0.0.0.0:8080 và phục vụ dashboard.
+4. Tạo detector bàn tay, FaceGate và BallTracker. verify_face_models() kiểm tra
+   OpenCV có API khuôn mặt và các file ONNX tồn tại.
+5. Đăng ký callback chế độ ESP32 rồi gọi App.run(user_loop=main_loop).
+
+Nếu webcam mất kết nối, CameraStream thử mở lại sau một khoảng chờ. Sau năm
+lần read() lỗi liên tiếp, nó giải phóng thiết bị rồi khởi động lại; API
+/api/camera/restart gọi cùng cơ chế này theo yêu cầu dashboard.
+
+## 5. Vòng lặp main_loop và máy trạng thái
+
+Mỗi lượt lặp lấy khung hình mới nhất rồi lật ngang. Cooldown ngăn một cử chỉ bị
+gửi lặp quá nhanh: lệnh thường chờ COMMAND_COOLDOWN_S = 0.7 giây, đổi tư thế
+chờ POSTURE_TRANSITION_COOLDOWN_S = 2.0 giây.
+
+### Nhánh manual
+
+Khi robot_state == STATE_MANUAL, Python không chạy quyết định khuôn mặt, người
+hay bóng. Nó chỉ giữ webcam hoạt động và cứ ba lượt suy luận một lần để cập
+nhật hand_detected cho dashboard. Lệnh chuyển động thuộc về Bluetooth hoặc
+dashboard, không phải cử chỉ tay.
+
+### Nhánh đuổi bóng
+
+Khi robot_state == STATE_CHASING, BallTracker.command_for_frame() được ưu tiên.
+Cứ năm khung hình, Python vẫn kiểm tra cử chỉ chỉ xuống để dừng thủ công.
+Nếu tìm thấy bóng đủ lớn, robot dừng và về STANDING; nếu chưa từng thấy bóng
+trong 6 giây hoặc mất bóng sau 6 giây quay tìm, robot cũng bỏ cuộc và về đứng.
+
+### Nhánh tự động thông thường
+
+Python chạy detector tay mỗi ba lượt. FaceGate được gọi khoảng mỗi 0,8 giây;
+trong giai đoạn quét tìm mặt, chu kỳ rút xuống 0,25 giây. Khi không thấy tay,
+BallTracker thỉnh thoảng tìm một hộp người; nếu hộp chạm mép trên và đủ cao,
+robot coi đó là “chỉ thấy chân” để bắt đầu camera scan.
+
+Các trạng thái chính:
+
+| Hằng số | Ý nghĩa dễ hiểu | Cử chỉ/điều kiện chuyển thường gặp |
 | --- | --- | --- |
-| `IDLE` | Chỉ thấy chân người, không thấy tay | Gửi mệnh lệnh `r`, bắt đầu ngẩng camera lên từ từ |
-| `SCANNING` | Đã thấy mặt hoặc tay | Gửi mệnh lệnh `x`, dừng ngẩng camera |
-| `SCANNING` | Hết thời gian quét cho phép | Gửi mệnh lệnh `n`, đưa camera về vị trí ban đầu |
-| `LOCKED` | Vẫn đang thấy mặt hoặc tay | Giữ vị trí camera |
-| `RETURNING` | Đã xác nhận cử chỉ | Trở về trạng thái `IDLE` |
+| STATE_STANDING | Đang đứng, trạng thái mặc định. | Lòng bàn tay: dừng; chỉ lên: w; trái/phải: a/d; chỉ xuống: ngồi; nắm tay: đuổi bóng. |
+| STATE_SITTING | Đang ngồi. | Chỉ xuống: nằm (c); chỉ lên: đứng (s). |
+| STATE_PRONE | Đang nằm. | Chỉ lên: ngồi (q). |
+| STATE_CHASING | BallTracker tự tìm và tiến về bóng. | Chỉ xuống hoặc tìm thấy/bỏ cuộc: dừng và về đứng. |
+| STATE_MANUAL | Python tạm dừng quyết định tự động. | Bluetooth M vào manual, O ra; dashboard có nút Manual/Automatic. |
 
-## Luồng dữ liệu đuổi theo mục tiêu
-Khi vào trạng thái đuổi theo mục tiêu, robot sẽ được đưa về tư thế đứng, camera được đưa về vị trí ban đầu, trạng thái trở thành `STATE_CHASING`, và khởi động `ball_tracker.start_chase()`:
-2. `BallTracker.command_for_frame(frame)` chạy mô hình nhận diện YOLOv8n với khung hình mới nhất từ camera.
-3. Nếu phát hiện đối tượng (một quả bóng):
-   - Quả bóng ở phần giữa màn hình -> Robot tiến về trước.
-   - Quả bóng ở bên trái màn hình -> Robot quay trái.
-   - Quả bóng ở bên phải màn hình -> Robot quay phải.
-   - Quả bóng được tính là đã được tìm thấy nếu bán kính của nó trong khung hình là đủ lớn -> Robot dừng lại.
-4. Nếu robot không thấy bóng quá lâu, nó sẽ tự động thoát trạng thái đuổi mục tiêu.
-5. Nếu robot đã thấy bóng trước đó nhưng bị mất dấu, nó sẽ xoay tại chỗ theo hướng nhìn thấy bóng lần cuối. Sau một thời gian không phát hiện lại được, nó cũng sẽ tự động thoát trạng thái đuổi mục tiêu.
-6. Khi thoát trạng thái đuổi mục tiêu, robot trở về trạng thái `STATE_STANDING`
+~~~mermaid
+stateDiagram-v2
+    [*] --> STANDING
+    STANDING --> SITTING: chỉ xuống / q
+    SITTING --> STANDING: chỉ lên / s
+    SITTING --> PRONE: chỉ xuống / c
+    PRONE --> SITTING: chỉ lên / q
+    STANDING --> CHASING: nắm tay
+    CHASING --> STANDING: bóng đủ lớn, timeout hoặc chỉ xuống
+    STANDING --> MANUAL: Bluetooth M hoặc dashboard Manual
+    SITTING --> MANUAL: vào Manual
+    PRONE --> MANUAL: vào Manual
+    MANUAL --> STANDING: Bluetooth O hoặc dashboard Automatic
+~~~
 
-Mỗi vài khung hình, `main.py` sẽ kiểm tra nhận diện cử chỉ tay một lần. Nếu phát hiện lệnh chỉ xuống dưới, robot sẽ lập tức thoát trạng thái đuổi theo mục tiêu.
+Một lệnh tư thế vẫn được gửi xuống ESP32 ngay khi máy trạng thái đổi, nhưng
+firmware không “bật” servo tới vị trí cuối. Nó nội suy chuyển tư thế; xem
+tài liệu ESP32 để hiểu phần cơ học.
 
-## Hiển thị thông tin
-Ma trận LED 13x8 của Uno Q hiển thị biểu cảm `smiley`, `indifferent`,... theo
-kết quả nhận diện khuôn mặt. Các trạng thái chi tiết được `_log_status()` ghi
-vào terminal của ứng dụng.
+## 6. Nhận diện bàn tay
 
-## Mở rộng hệ thống
-### Cách thêm các cử chỉ tay mới
-1. Sử dụng các hàm hỗ trợ nhận diện trong `python/main.py` hoặc `python/detector.py` để xác định cử chỉ tay.
-2. Thêm mệnh lệnh tương ứng cử chỉ mới trong `robot_state` ở `main_loop`.
-3. Nếu thêm một mệnh lệnh mới, update danh sách mệnh lệnh cho phép trong `main.py`, và `is_supported_esp_command()` trong `sketch/sketch.ino`.
-5. Thêm lệnh điều khiển tương ứng trong code ESP32.
-6. Update bảng mệnh lệnh trong file hướng dẫn này.
+detector.py dùng hai model MediaPipe ONNX:
 
-### Điều chỉnh nhận diện
-- Độ nhạy nhận diện cử chỉ tay: điều chỉnh `score_threshold` và `conf_threshold` trong lệnh khởi chạy `HandGestureDetector`  ở `main.py`.
-- Độ nhạy nhận diện khuôn mặt: điều chỉnh `FACE_MATCH_THRESHOLD` ở `face_gate.py`.
-- Khung thời gian nhận diện: điều chỉnh `FAMILIAR_GRACE_S` ở `main.py`.
-- Trạng thái đuổi mục tiêu: điều chỉnh ngưỡng nhận diện như bán kính tìm thấy bóng `BALL_FOUND_RADIUS`, `BALL_CENTER_DEADZONE`, và các biến kiểm soát thời gian tìm kiếm ở `ball_tracker.py`.
-- Trạng thái quét camera: điều chỉnh các biến kiểm soát thời gian quét `CAMERA_SCAN_TIMEOUT_S`, `CAMERA_TARGET_LOST_S`, `CAMERA_HAND_CONFIRMATIONS` ở `main.py`.
+1. Palm detector tìm vùng bàn tay.
+2. Hand-pose model tìm 21 điểm mốc (x, y, z), độ tin cậy và tay trái/phải.
+3. Các hàm hình học so khoảng cách đầu ngón tay–cổ tay với khớp MCP để phân
+   loại OPEN_PALM, FIST, POINTING hoặc UNKNOWN.
 
-### Thay camera
-Nhớ điều chỉnh đường dẫn camera nếu cần trong: `python/main.py`
+main.py dùng thêm hướng của ngón trỏ để phân biệt trái/phải/lên/xuống. Ngưỡng
+dọc hiện tại là POINT_VERTICAL_THRESHOLD = 20.0 pixel; các ngưỡng ngang cũng là
+20 pixel. Detector khởi tạo với score_threshold=0.6 và conf_threshold=0.6.
 
-## Các bước test cần thiết
-1. Cài đặt các thư viện Python cần thiết:
-   `python3 -m pip install -r python/requirements.txt`
-2. Xác nhận đường dẫn tới camera:
-   `ls -l /dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_E21C4540-video-index0`
-3. Xây lại cơ sở dữ liệu khuôn mặt nếu có thay đổi:
-   `python3 python/enroll_faces.py`
-4. Chạy app DogVision trên App Lab, hoặc chạy `python3 python/main.py`
-5. Xác nhận terminal không báo `CAMERA ERROR`.
-6. Test các cử chỉ khi đang đứng:
-   Xòe tay, chỉ lên trên, chỉ sang trái, chỉ sang phải, chỉ xuống dưới, nắm tay, v.v...
-7. Test thay đổi trạng thái:
-   Đứng -> Ngồi, Ngồi -> Nằm, Nằm -> Ngồi, Ngồi -> Đứng, Đứng -> Đuổi, v.v...
-8. Test nhận diện khuôn mặt:
-   Nhận diện khuôn mặt người quen và hiển thị lên ma trận LED.
-   Khi `REQUIRE_FAMILIAR_FACE` được bật, robot phải bỏ qua cử chỉ từ người lạ.
-9. Test trạng thái đuổi theo mục tiêu:
-   Nắm tay để vào trạng thái đuổi mục tiêu, chỉ xuống để thoát trạng thái, phát hiện một quả bóng ở gần sẽ dừng trạng thái đuổi.
-10. Theo dõi các dòng `ROBOT_STATUS` trong terminal để xác nhận mệnh lệnh.
+Khi một tay xuất hiện nhưng khuôn mặt chưa được cho phép, terminal ghi
+Ignoring (unfamiliar) và dashboard vẫn có thể báo đã thấy tay. Đây là cố ý:
+phát hiện không đồng nghĩa với được quyền điều khiển.
+
+## 7. Cổng khuôn mặt và đăng ký người
+
+FaceGate dùng YuNet để tìm mặt rồi SFace để tạo vector đặc trưng. File
+python/known_faces_db.json là một từ điển tên người → vector; nó được tạo bởi
+enroll_faces.py, không nên sửa bằng tay.
+
+Quy trình đăng ký:
+
+1. Đặt ảnh vào python/known_faces/<ten-nguoi>/.
+2. Chạy python3 python/enroll_faces.py.
+3. Script chọn mặt lớn nhất mỗi ảnh, căn chỉnh và lấy đặc trưng SFace.
+4. Các vector của cùng người được trung bình rồi ghi ra JSON.
+
+Trong lúc chạy, face_gate.recognize(frame) trả về:
+
+- familiar: điểm so khớp đạt FACE_MATCH_THRESHOLD = 0.363;
+- unfamiliar: có mặt nhưng không đạt ngưỡng;
+- none: không có mặt hoặc không đủ dữ liệu.
+
+REQUIRE_FAMILIAR_FACE = True là mặc định. Khi bật, thời điểm nhận diện người
+quen được giữ trong FAMILIAR_GRACE_S = 3.0 giây để cử chỉ không bị mất chỉ vì
+một khung hình mờ. Đặt thành False để cho mọi người điều khiển bằng cử chỉ,
+nhưng FaceGate và biểu cảm LED vẫn tiếp tục chạy.
+
+## 8. Quét camera khi chỉ thấy chân
+
+BallTracker tìm hộp người ở các lượt thưa hơn. Nếu chỉ thấy phần chân, Python
+không đoán cử chỉ ngay vì bàn tay đang ở ngoài khung. Nó điều khiển servo camera
+theo thời gian:
+
+| Trạng thái | Điều kiện | Lệnh ESP32 |
+| --- | --- | --- |
+| IDLE | Thấy người chỉ có chân. | r: quét lên; nếu không yêu cầu mặt thì quét tay ngay. |
+| FACE_SCANNING | Đang tìm người quen. | Giữ r; gặp mặt quen thì x, sau đó v để quét xuống tìm tay. |
+| HAND_SCANNING | Đang tìm tay (trực tiếp hoặc sau mặt). | v; cần hai lần xác nhận liên tiếp. |
+| LOCKED | Đã thấy mục tiêu. | Giữ vị trí cho tới khi mất mục tiêu. |
+| RETURNING | Timeout/mất mục tiêu/đã nhận lệnh. | n: ESP32 dùng thời gian đã ghi để quay về gần trung tính. |
+
+Các hằng số Python hiện tại là CAMERA_SCAN_TIMEOUT_S = 1.5,
+CAMERA_TARGET_LOST_S = 1.0, CAMERA_HAND_CONFIRMATIONS = 2, chu kỳ kiểm tra mặt
+0,25 giây và thời gian ổn định khi trả về 0,1 giây. Firmware ESP32 có giới hạn
+an toàn vật lý CAMERA_SCAN_MAX_MS = 500; đây là giới hạn thấp hơn thời gian
+timeout Python hiện tại, nên servo có thể tự dừng trước khi Python báo timeout.
+Khi tinh chỉnh cơ khí, hãy làm cho hai giới hạn nhất quán và luôn thử với robot
+được đỡ. Mạch và cách chỉnh nằm trong hướng dẫn camera scan.
+
+## 9. Phát hiện và đuổi bóng
+
+BallTracker nạp python/yolov8n.onnx bằng OpenCV DNN, co khung hình về đầu vào
+320×320 bằng letterbox rồi giải mã 80 lớp COCO. Lớp được dùng để đuổi là
+sports ball (ID 32); lớp person (ID 0) chỉ dùng để phát hiện chân.
+
+Khi nắm tay ở trạng thái đứng, main.py gọi start_chase() và đặt trạng thái
+searching:
+
+- Bóng bên trái vùng giữa → gửi a (quay trái).
+- Bóng bên phải vùng giữa → gửi d (quay phải).
+- Bóng trong vùng giữa → gửi w (tiến).
+- Bán kính bóng từ 45 pixel trở lên → coi là đã tới, gửi s.
+- Chưa từng thấy bóng sau 6 giây → not_found; đã từng thấy nhưng mất quá 6
+  giây → lost rồi dừng.
+
+Trong lúc CHASING, dashboard nhận tối đa năm dự đoán có điểm từ 0,15 trở lên,
+không chỉ lớp bóng. Vì vậy panel Detected objects có thể hiện person, dog,
+sports ball… dù chỉ sports ball mới làm robot đuổi. Các trường trạng thái là
+ball_detection_active, ball_detection_status và ball_detection_objects.
+
+## 10. Bridge, UART và bảng lệnh
+
+Python không truy cập servo trực tiếp. Lời gọi Bridge chạy trên STM32; STM32
+chỉ cho qua các ký tự mà is_supported_esp_command() chấp nhận. Khung UART
+luôn có dạng:
+
+~~~text
+CMD:<một-ký-tự>\n
+~~~
+
+Chế độ cũng là một dòng riêng:
+
+~~~text
+MODE:MANUAL\n
+MODE:AUTO\n
+~~~
+
+Bảng ký tự ESP32 hiện hỗ trợ:
+
+| Ký tự | Ý nghĩa ở ESP32 | Nguồn thường gặp |
+| --- | --- | --- |
+| w / b | Tiến / lùi | Cử chỉ lên hoặc dashboard W/S (S gửi b). |
+| a / d | Quay trái / phải | Cử chỉ ngang hoặc dashboard A/D. |
+| e / f | Strafe trái / phải | Dashboard Q/E hoặc Bluetooth. |
+| s | Đứng/dừng hoặc đứng lên từ tư thế thấp | Lòng bàn tay, STOP, tư thế Stand. |
+| z | Giữ tư thế, tắt hiệu chỉnh cân bằng | Nút Hold. |
+| q / c | Ngồi / nằm | Cử chỉ và nút Sit/Prone. |
+| p | Pace (gait hai hàng) | Giữ cho tương thích firmware; hiện không có nút riêng trên dashboard. |
+| g / u / j | Vẫy / nhún / nhảy | Firmware hỗ trợ; giao diện hiện không đưa các nút này ra. |
+| k | Đưa servo về tâm để hiệu chỉnh | Bảo trì. |
+| h / l / n | Camera lên / xuống / trả về | Điều khiển camera cố định. |
+| r / v / x | Quét lên / quét xuống / dừng quét | Máy trạng thái camera. |
+
+Đừng nhầm s UART với phím PC S: dashboard ánh xạ phím S thành tên lệnh
+backward, sau đó Python gửi ký tự UART b; nút STOP/phím Space mới gửi s.
+
+## 11. Dashboard và trạng thái quan sát
+
+ManualVideoServer phục vụ:
+
+| URL | Phương thức | Chức năng |
+| --- | --- | --- |
+| /, /dashboard, /dashboard.html | GET | Giao diện web/dashboard.html. |
+| /camera.mjpg | GET | Luồng multipart JPEG từ khung hình mới nhất. |
+| /api/status | GET | JSON gồm chế độ, trạng thái robot, mặt/tay, camera scan, bóng và lỗi. |
+| /api/mode | POST | JSON {"mode":"manual"} hoặc {"mode":"automatic"}. |
+| /api/command | POST | JSON {"command":"forward"} hoặc tên lệnh dashboard. |
+| /api/camera/restart | POST | Yêu cầu CameraStream đóng/mở lại webcam. |
+| /api/release | POST | Nhả quyền dashboard và gửi cơ chế dừng an toàn khi rời trang. |
+
+Chỉ một địa chỉ LAN giữ lease tại một thời điểm; lease mặc định là 15 giây và
+được gia hạn bởi các yêu cầu tiếp theo. Nếu trình duyệt khác truy cập khi lease
+còn hiệu lực, API trả HTTP 409 thay vì âm thầm tranh quyền.
+
+Các trường quan trọng trong /api/status:
+
+control_mode (automatic, manual-dashboard, manual-bluetooth), robot_state,
+manual_source, face_status, hand_detected, camera_scan_state,
+ball_detection_*, last_command, camera_live, camera_error,
+camera_restart_count và camera_last_restart_reason.
+
+## 12. Nơi chỉnh thông số
+
+| Mục tiêu | File và biến tiêu biểu |
+| --- | --- |
+| Nhạy hơn/ít nhạy hơn với tay | python/main.py: tham số HandGestureDetector; POINT_VERTICAL_THRESHOLD. |
+| Nhận mặt nghiêm ngặt hơn | python/face_gate.py: FACE_MATCH_THRESHOLD, ngưỡng YuNet. |
+| Thời gian cho phép cử chỉ sau khi thấy người quen | python/main.py: FAMILIAR_GRACE_S. |
+| Bắt bóng sớm/muộn, vùng giữa, timeout | python/ball_tracker.py: BALL_CONF_THRESHOLD, BALL_FOUND_RADIUS, BALL_CENTER_DEADZONE, NEVER_SEEN_TIMEOUT_S, SPIN_SEARCH_TIMEOUT_S. |
+| Tốc độ và chiều camera | dog_esp32/dog_esp32.ino: CAMERA_SERVO_*, CAMERA_TILT_STEP_MS, CAMERA_SCAN_MAX_MS. |
+| Quét tìm mặt/tay | python/main.py: nhóm CAMERA_SCAN_*. |
+| Độ dài bước/gait | dog_esp32/dog_esp32.ino: stepLength, stepHeight, totalCycleDuration, dutyFactor, crabStep. |
+| Tư thế/chuyển tư thế | ESP32: POSE_TRANSITION_*, SIT_EXIT_*. |
+| Cân bằng | ESP32: bốn struct PID và POSE_TRANSITION_BALANCE_SCALE. |
+
+Mỗi lần chỉ đổi một thông số, ghi lại giá trị cũ và kiểm tra khi robot được kê.
+Đổi nhiều ngưỡng cùng lúc khiến không biết nguyên nhân cải thiện hay xấu đi.
+
+## 13. Kiểm tra và chẩn đoán theo tầng
+
+### Python/webcam
+
+~~~bash
+python3 -m pip install -r python/requirements.txt
+python3 python/enroll_faces.py
+python3 python/main.py
+~~~
+
+Kiểm tra đường dẫn camera, xem terminal có CAMERA ERROR hay không, rồi mở
+http://<uno-q-ip>:8080/. Nếu khung hình đứng, thử nút Restart camera và kiểm tra
+camera_last_restart_reason.
+
+### Bridge/UART
+
+Xác nhận sketch đã nạp, Serial1 ở 115200 và hai bên nối chéo TX/RX với GND
+chung. Với robot được nâng, gửi STOP trước; chỉ khi thấy ESP32 nhận CMD:s mới
+thử các lệnh khác.
+
+### ESP32/servo
+
+Mở Serial Monitor của ESP32. CONTROL_MODE=..., POSE_TRANSITION=... và dòng
+[STS ...] giúp phân biệt lỗi lệnh, lỗi nội suy và lỗi servo. Nếu telemetry
+cho thấy điện áp tụt mạnh hoặc camera/UNO Q reset khi đổi tư thế, dừng thử trên
+sàn, kiểm tra nguồn 12 V, dây nguồn, đầu nối và GND chung; không cố chữa bằng
+cách chỉ tăng tốc servo.
+
+### Lỗi nhận diện
+
+- Mặt luôn unfamiliar: chạy lại enroll_faces.py, dùng ảnh sáng và nhìn thẳng,
+  rồi kiểm tra FACE_MATCH_THRESHOLD.
+- Tay không được nhận: đưa cả bàn tay vào khung, tăng ánh sáng, quan sát
+  hand_detected, rồi mới giảm ngưỡng.
+- Bóng không được thấy: kiểm tra model 320×320, ánh sáng và panel vật thể; tên
+  sports ball là lớp duy nhất điều khiển đuổi.
+
+## 14. Cách thêm tính năng mới
+
+1. Viết phần nhận diện hoặc luật quyết định trong Python; đặt kết quả thành một
+   tên lệnh rõ ràng.
+2. Thêm tên đó vào DASHBOARD_COMMANDS nếu dashboard cần dùng, và cập nhật
+   sketch.ino để ký tự được cho phép.
+3. Thêm case tương ứng trong ESP32; nếu là chuyển động mới, mô tả mục tiêu
+   chân, tốc độ và watchdog.
+4. Cập nhật bảng lệnh/tài liệu, kiểm tra python3 -m py_compile python/*.py và
+   git diff --check.
+5. Nạp từng tầng, thử với robot được kê, rồi mới thử chuyển động trên sàn.
+
+## 15. Thuật ngữ cho người mới
+
+- **Khung hình (frame):** một ảnh đơn lấy từ webcam.
+- **Model/mô hình:** file ONNX và phép tính biến ảnh thành dự đoán.
+- **Bounding box:** hình chữ nhật bao quanh mặt, tay, người hoặc bóng.
+- **Cooldown:** khoảng thời gian khóa lệnh mới để tránh gửi lặp.
+- **Bridge:** lớp giao tiếp giữa Python và chương trình STM32 trên UNO Q.
+- **UART/Serial:** đường truyền byte; TX của bên này nối RX của bên kia.
+- **Firmware:** chương trình chạy trực tiếp trên ESP32/STM32.
+- **IK:** phép tính ngược từ tọa độ bàn chân sang góc khớp.
+- **Gait:** nhịp phối hợp chân khi robot đi.
+- **PID:** bộ điều chỉnh dùng sai số IMU để giảm nghiêng/lắc.
+- **Telemetry:** số đo servo trả về, như vị trí, tốc độ, tải, điện áp và nhiệt độ.
