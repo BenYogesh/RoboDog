@@ -512,6 +512,8 @@ command_cooldown_until = 0.0
 last_dashboard_command = None
 last_dashboard_command_at = None
 last_dashboard_error = None
+last_ball_detection_status = "inactive"
+last_ball_detection_objects = []
 
 
 def send_control_mode(mode):
@@ -687,6 +689,17 @@ def dashboard_status():
         "face_status": last_face_status,
         "hand_detected": last_hand_detected,
         "camera_scan_state": camera_scan_state,
+        "ball_detection_active": robot_state == STATE_CHASING,
+        "ball_detection_status": (
+            last_ball_detection_status
+            if robot_state == STATE_CHASING
+            else "inactive"
+        ),
+        "ball_detection_objects": (
+            list(last_ball_detection_objects)
+            if robot_state == STATE_CHASING
+            else []
+        ),
         "last_command": last_dashboard_command,
         "last_command_at": last_dashboard_command_at,
         "last_error": last_dashboard_error,
@@ -744,6 +757,7 @@ def main_loop():
     global inference_counter, robot_state, command_cooldown_until
     global last_familiar_time, next_face_check_at
     global last_face_status, last_hand_detected
+    global last_ball_detection_status, last_ball_detection_objects
 
     try:
         frame = cam.read()
@@ -775,6 +789,20 @@ def main_loop():
             ball, top_candidates, command, display_text, exit_reason = (
                 ball_tracker.command_for_frame(frame)
             )
+            last_ball_detection_objects = [
+                {"label": name, "confidence": round(float(confidence), 3)}
+                for name, confidence in top_candidates[:5]
+            ]
+            if exit_reason == "found":
+                last_ball_detection_status = "found"
+            elif exit_reason == "gave_up":
+                last_ball_detection_status = "not_found"
+            elif ball is not None:
+                last_ball_detection_status = "tracking"
+            elif ball_tracker.ball_ever_seen:
+                last_ball_detection_status = "lost"
+            else:
+                last_ball_detection_status = "searching"
             send_motor_command(command)
             if exit_reason == "found":
                 robot_state = STATE_STANDING
@@ -889,6 +917,8 @@ def main_loop():
                     command, display_text = CMD_STOP, "Ball Mode"
                     robot_state = STATE_CHASING
                     ball_tracker.start_chase()
+                    last_ball_detection_status = "searching"
+                    last_ball_detection_objects = []
                     posture_transition = True
                     set_cam_state("D")
                 else:

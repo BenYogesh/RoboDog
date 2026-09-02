@@ -29,6 +29,8 @@ The dashboard provides:
 - grouped Up/Down camera tilt and **Restart camera** controls (camera scanning is
   disabled during manual mode);
 - a compact face and hand detection strip above the live feed;
+- a ball-detection panel showing the current ball status and top YOLO object
+  candidates while ball mode is active;
 - visible PC key hints on the movement, posture, and camera tilt controls;
 - keyboard shortcuts: `W/A/S/D` move, `Q/E` strafe, `X` stand, `C` sit,
   `V` prone, `Z` hold, `B` bounce, `I/K` camera tilt, and `Space` stops
@@ -88,6 +90,7 @@ movement stops when Bluetooth commands stop arriving.
 6. Send Bluetooth `O`, then use **Take dashboard control**. Test movement only
    with the robot lifted or in a clear, supervised area; release a movement
    button and confirm it sends stop.
-7. Confirm the dashboard's face/hand strip updates above the live feed and
-   verify the PC key hints trigger their matching controls. Press **Return to
-   automatic**, then verify automatic vision behavior resumes.
+7. Enter ball mode with a fist gesture and confirm the dashboard shows the ball
+   status plus detected object candidates. Confirm the face/hand strip still
+   updates and the PC key hints trigger their matching controls. Press
+   **Return to automatic**, then verify automatic vision behavior resumes.
