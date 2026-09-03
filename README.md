@@ -13,6 +13,7 @@ mỗi thư mục chịu trách nhiệm cho phần nào.
 - Phát hiện quả bóng bằng YOLOv8n rồi tự quay/đi theo bóng.
 - Nhận lệnh thủ công bằng Bluetooth trên ESP32.
 - Nhận lệnh thủ công bằng trình duyệt cùng luồng webcam trực tiếp trên mạng LAN.
+- Chuyển nhanh yêu cầu khuôn mặt quen và khởi động lại webcam ngay trên dashboard.
 - Điều khiển tư thế, dáng đi, cân bằng IMU và camera nghiêng bằng firmware ESP32.
 
 Nhánh này không chứa chức năng âm thanh hoặc màn hình OLED. UNO Q vẫn có thể
@@ -132,7 +133,8 @@ Chọn **Manual** để dashboard giữ quyền điều khiển, rồi nhấn gi
 động. Chọn **Automatic** để trả quyền cho vòng lặp nhận diện. Bluetooth có
 quyền ưu tiên: khi ESP32 nhận `M`, dashboard không thể giành quyền cho tới khi
 ESP32 nhận `O`. Xem [Điều khiển thủ công](docs/manual-control.md) để biết API,
-phím PC, lease một thiết bị và cách xử lý camera.
+phím PC, lease một thiết bị, nút bật/tắt yêu cầu khuôn mặt quen và cách xử lý
+camera. Nút Face gate và Restart camera vẫn hoạt động khi đang ở Automatic.
 
 ## Trình tự khởi động và vòng đời lệnh
 

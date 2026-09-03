@@ -488,6 +488,26 @@ def commands_currently_allowed():
     )
 
 
+def handle_face_gate_requirement(required=None):
+    # Cập nhật yêu cầu khuôn mặt quen do dashboard gửi tới.
+    global REQUIRE_FAMILIAR_FACE
+
+    if required is None:
+        required = not REQUIRE_FAMILIAR_FACE
+    REQUIRE_FAMILIAR_FACE = bool(required)
+
+    # Đưa phiên quét đang chạy về bước trả camera để dùng cài đặt mới.
+    if camera_scan_state not in (CAMERA_SCAN_IDLE, CAMERA_SCAN_RETURNING):
+        return_camera_from_scan(time.monotonic())
+
+    setting = "required" if REQUIRE_FAMILIAR_FACE else "not_required"
+    print(f"FACE_GATE_REQUIREMENT={setting}")
+    return {
+        "status": "accepted",
+        "require_familiar_face": REQUIRE_FAMILIAR_FACE,
+    }
+
+
 def set_face_matrix(expression):
     global last_face_matrix_state
     if expression == last_face_matrix_state:
@@ -686,6 +706,7 @@ def dashboard_status():
         "robot_state": robot_state,
         "manual_source": manual_control_source,
         "camera_path": camera_path,
+        "require_familiar_face": REQUIRE_FAMILIAR_FACE,
         "face_status": last_face_status,
         "hand_detected": last_hand_detected,
         "camera_scan_state": camera_scan_state,
@@ -979,6 +1000,7 @@ manual_video.configure_dashboard(
     mode_handler=handle_dashboard_mode,
     status_provider=dashboard_status,
     camera_restart_handler=force_restart_camera,
+    face_gate_handler=handle_face_gate_requirement,
 )
 
 

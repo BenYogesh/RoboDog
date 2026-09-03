@@ -77,6 +77,7 @@ buông tay hoặc mất kết nối.
 | Tư thế | Hold / Bounce | Z / B | z / u |
 | Camera | Up / Down | I / K | h / l |
 | Camera | Restart camera | Không có phím | Gọi API khởi động lại webcam, không phải lệnh servo. |
+| Camera | Face gate toggle | Không có phím | Gọi API bật/tắt yêu cầu khuôn mặt quen. |
 
 Điểm dễ nhầm là phím PC S có nghĩa **Backward**. Python nhận tên
 backward rồi chuyển thành ký tự firmware b; ký tự s được dành cho STOP và tư
@@ -86,6 +87,15 @@ crab_left/crab_right trong API.
 Firmware còn chấp nhận p (pace), g (wave), u (bounce) và j (jump). Bounce vẫn
 có phím B; các lệnh legacy khác chưa có nút riêng trên giao diện hiện tại nhưng
 có thể gửi bằng API hoặc Bluetooth nếu cần thử nghiệm.
+
+Nút **Face gate toggle** không điều khiển servo. Nó đổi cài đặt
+REQUIRE_FAMILIAR_FACE ngay lập tức và hoạt động trong cả **Manual** lẫn
+**Automatic**. Khi nút hiển thị **Require familiar face**, cử chỉ chỉ được
+chấp nhận sau khi FaceGate thấy người quen; khi hiển thị **Allow any face**,
+mọi khuôn mặt (kể cả không nhận ra) đều có thể đi qua cổng cử chỉ. FaceGate vẫn
+chạy để báo trạng thái nhận diện trong cả hai lựa chọn.
+Thiết lập này chỉ có hiệu lực trong phiên chạy hiện tại; khi khởi động lại
+python/main.py, giá trị mặc định REQUIRE_FAMILIAR_FACE = True được dùng lại.
 
 ## 4. Luồng một lần nhấn
 
@@ -118,6 +128,7 @@ giữ lease.
 | /api/mode | POST | {"mode":"manual"} vào dashboard hoặc {"mode":"automatic"} trả về tự động. |
 | /api/command | POST | {"command":"forward"}, tên lệnh hoặc một ký tự được hỗ trợ. |
 | /api/camera/restart | POST | Đóng/mở lại webcam trong luồng CameraStream. |
+| /api/face-gate | POST | {"require_familiar_face":true/false}; bật/tắt cổng khuôn mặt, không phụ thuộc chế độ robot. |
 | /api/release | POST | Nhả lease; dashboard cố gửi STOP trước khi gọi endpoint này. |
 
 Ví dụ chuyển sang dashboard manual (thay địa chỉ cho đúng UNO Q):
@@ -142,6 +153,14 @@ Khi kết thúc, nên trả về automatic:
 curl -X POST http://<uno-q-ip>:8080/api/mode \
   -H "Content-Type: application/json" \
   -d '{"mode":"automatic"}'
+~~~
+
+Bật cho phép mọi khuôn mặt:
+
+~~~bash
+curl -X POST http://<uno-q-ip>:8080/api/face-gate \
+  -H "Content-Type: application/json" \
+  -d '{"require_familiar_face":false}'
 ~~~
 
 ## 6. Lease một dashboard
@@ -180,8 +199,9 @@ làm theo cử chỉ; đó chỉ là thông tin giám sát.
 
 Nút **Restart camera** gọi /api/camera/restart. Hàm force_restart_camera() đặt
 cờ để luồng CameraStream giải phóng cv2.VideoCapture rồi mở lại ở lần lặp kế
-tiếp; thao tác không chặn vòng lặp điều khiển. Camera cũng tự thử lại sau năm
-lần đọc lỗi liên tiếp, với thời gian chờ 0,5 giây.
+tiếp; thao tác không chặn vòng lặp điều khiển. Endpoint này chỉ cần dashboard
+đang giữ lease, nên dùng được cả khi robot ở **Automatic** hoặc **Manual**.
+Camera cũng tự thử lại sau năm lần đọc lỗi liên tiếp, với thời gian chờ 0,5 giây.
 
 Khởi động lại webcam không sửa được nguyên nhân nguồn yếu. Nếu camera tắt cùng
 lúc servo kéo tải, hãy dừng robot, kiểm tra pin/nguồn 12 V, dây cấp servo và

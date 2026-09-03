@@ -305,18 +305,25 @@ ManualVideoServer phục vụ:
 | /api/mode | POST | JSON {"mode":"manual"} hoặc {"mode":"automatic"}. |
 | /api/command | POST | JSON {"command":"forward"} hoặc tên lệnh dashboard. |
 | /api/camera/restart | POST | Yêu cầu CameraStream đóng/mở lại webcam. |
+| /api/face-gate | POST | JSON {"require_familiar_face":true/false}; bật/tắt cổng khuôn mặt. |
 | /api/release | POST | Nhả quyền dashboard và gửi cơ chế dừng an toàn khi rời trang. |
 
 Chỉ một địa chỉ LAN giữ lease tại một thời điểm; lease mặc định là 15 giây và
 được gia hạn bởi các yêu cầu tiếp theo. Nếu trình duyệt khác truy cập khi lease
-còn hiệu lực, API trả HTTP 409 thay vì âm thầm tranh quyền.
+còn hiệu lực, API trả HTTP 409 thay vì âm thầm tranh quyền. Restart camera và
+đổi yêu cầu khuôn mặt không phụ thuộc robot đang ở Manual hay Automatic; chúng
+chỉ yêu cầu dashboard giữ lease.
 
 Các trường quan trọng trong /api/status:
 
 control_mode (automatic, manual-dashboard, manual-bluetooth), robot_state,
-manual_source, face_status, hand_detected, camera_scan_state,
+manual_source, require_familiar_face, face_status, hand_detected, camera_scan_state,
 ball_detection_*, last_command, camera_live, camera_error,
 camera_restart_count và camera_last_restart_reason.
+
+require_familiar_face được đổi trong bộ nhớ khi dashboard gọi /api/face-gate;
+thiết lập này không ghi xuống đĩa và sẽ trở về True sau khi khởi động lại
+python/main.py.
 
 ## 12. Nơi chỉnh thông số
 

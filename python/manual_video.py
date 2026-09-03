@@ -25,6 +25,7 @@ DASHBOARD_PATH = Path(__file__).resolve().parent.parent / "web" / "dashboard.htm
 DashboardCommandHandler = Callable[[str], dict[str, Any]]
 DashboardModeHandler = Callable[[str], dict[str, Any]]
 DashboardCameraRestartHandler = Callable[[], dict[str, Any]]
+DashboardFaceGateHandler = Callable[[bool | None], dict[str, Any]]
 DashboardStatusProvider = Callable[[], dict[str, Any]]
 
 
@@ -86,7 +87,12 @@ class _CameraHandler(BaseHTTPRequestHandler):
                 {"status": "released" if released else "ignored"},
             )
             return
-        if path not in {"/api/command", "/api/mode", "/api/camera/restart"}:
+        if path not in {
+            "/api/command",
+            "/api/mode",
+            "/api/camera/restart",
+            "/api/face-gate",
+        }:
             self.send_error(HTTPStatus.NOT_FOUND, "Unknown dashboard endpoint")
             return
 
@@ -99,8 +105,28 @@ class _CameraHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/camera/restart":
-            # Restart không cần body JSON; bước xác thực phía trên vẫn bắt buộc.
+            # Restart không phụ thuộc chế độ robot; chỉ cần dashboard có lease.
             result = self.server.video.handle_camera_restart()
+        elif path == "/api/face-gate":
+            try:
+                # Payload không có khóa này mang nghĩa bật/tắt theo trạng thái hiện tại.
+                payload = self._read_json()
+            except ValueError as error:
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"status": "error", "message": str(error)},
+                )
+                return
+
+            # Giá trị bool tường minh giúp giao diện không phụ thuộc trạng thái cũ.
+            required = payload.get("require_familiar_face")
+            if required is not None and not isinstance(required, bool):
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"status": "error", "message": "Expected a boolean face-gate setting"},
+                )
+                return
+            result = self.server.video.handle_face_gate(required)
         else:
             try:
                 # Đọc và kiểm tra body trước khi chuyển dữ liệu cho main.py.
@@ -268,6 +294,7 @@ class ManualVideoServer:
         self._dashboard_command_handler: DashboardCommandHandler | None = None
         self._dashboard_mode_handler: DashboardModeHandler | None = None
         self._dashboard_camera_restart_handler: DashboardCameraRestartHandler | None = None
+        self._dashboard_face_gate_handler: DashboardFaceGateHandler | None = None
         self._dashboard_status_provider: DashboardStatusProvider | None = None
         # Đọc HTML một lần, tránh đọc đĩa cho mỗi lần trình duyệt tải trang.
         self._dashboard_html = self._load_dashboard_html()
@@ -302,12 +329,14 @@ class ManualVideoServer:
         mode_handler: DashboardModeHandler,
         status_provider: DashboardStatusProvider,
         camera_restart_handler: DashboardCameraRestartHandler | None = None,
+        face_gate_handler: DashboardFaceGateHandler | None = None,
     ) -> None:
         # Gắn callback sau khi server đã tạo để tránh import vòng với main.py.
 
         self._dashboard_command_handler = command_handler
         self._dashboard_mode_handler = mode_handler
         self._dashboard_camera_restart_handler = camera_restart_handler
+        self._dashboard_face_gate_handler = face_gate_handler
         self._dashboard_status_provider = status_provider
 
     def serve_dashboard(self, handler: _CameraHandler) -> None:
@@ -435,6 +464,16 @@ class ManualVideoServer:
             return self._dashboard_camera_restart_handler()
         except Exception as error:
             print(f"Camera restart failed: {error}")
+            return {"status": "error", "message": str(error)}
+
+    def handle_face_gate(self, required: bool | None = None) -> dict[str, Any]:
+        # Chuyển cài đặt yêu cầu mặt quen sang main.py, không phụ thuộc manual.
+        if self._dashboard_face_gate_handler is None:
+            return {"status": "error", "message": "Face-gate control is not initialized"}
+        try:
+            return self._dashboard_face_gate_handler(required)
+        except Exception as error:
+            print(f"Face-gate setting failed: {error}")
             return {"status": "error", "message": str(error)}
 
     def start(self) -> None:
